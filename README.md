@@ -23,7 +23,6 @@ tests/        automated tests
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
-cp .env.example .env
 uvicorn app.main:app --reload
 ```
 
