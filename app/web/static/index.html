@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>KnowForge Dashboard</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar" aria-label="Workspace">
+        <div class="brand-block">
+          <div class="brand-mark">K</div>
+          <div>
+            <h1>KnowForge</h1>
+            <p>LLMWiki assistant</p>
+          </div>
+        </div>
+
+        <section class="panel">
+          <div class="panel-heading">
+            <h2>Sources</h2>
+            <span id="uploadState" class="status-pill">Ready</span>
+          </div>
+          <label class="upload-zone" for="pdfInput" id="dropZone">
+            <span class="upload-icon">+</span>
+            <span>
+              <strong>Upload PDF</strong>
+              <small>Maximum 5 MB. Builds wiki pages automatically.</small>
+            </span>
+          </label>
+          <input id="pdfInput" type="file" accept="application/pdf" hidden />
+          <div id="uploadError" class="inline-error" hidden></div>
+        </section>
+
+        <section class="panel wiki-panel">
+          <div class="panel-heading">
+            <h2>Wiki Pages</h2>
+            <button id="refreshWikiBtn" class="icon-button" type="button" title="Refresh wiki">
+              <span>↻</span>
+            </button>
+          </div>
+          <div id="wikiList" class="wiki-list"></div>
+          <div id="emptyWiki" class="empty-mini">Upload a PDF or create a page to start.</div>
+        </section>
+      </aside>
+
+      <main class="chat-area">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">Human and KnowForge Assistant</p>
+            <h2>Chat Board</h2>
+          </div>
+          <div class="topbar-actions">
+            <button id="newChatBtn" class="secondary-button" type="button">New Chat</button>
+            <button id="compactWikiBtn" class="secondary-button" type="button">Compact Wiki</button>
+          </div>
+        </header>
+
+        <section id="chatBoard" class="chat-board" aria-live="polite"></section>
+
+        <footer class="composer-wrap">
+          <div id="replyBanner" class="reply-banner" hidden>
+            <span id="replyLabel"></span>
+            <button id="cancelReplyBtn" type="button">Cancel</button>
+          </div>
+          <form id="chatForm" class="composer">
+            <textarea
+              id="messageInput"
+              rows="1"
+              placeholder="Ask KnowForge, reply to a message, or continue a thread..."
+              autocomplete="off"
+            ></textarea>
+            <button id="sendBtn" class="primary-button" type="submit">Send</button>
+          </form>
+          <div class="composer-meta">
+            <span>Shift + Enter for new line</span>
+            <span id="networkState">Connected to local API</span>
+          </div>
+        </footer>
+      </main>
+
+    </div>
+
+    <template id="messageTemplate">
+      <article class="message-card">
+        <div class="message-rail"></div>
+        <div class="message-main">
+          <header class="message-header">
+            <div>
+              <strong class="message-author"></strong>
+              <span class="message-time"></span>
+            </div>
+            <div class="message-actions">
+              <button class="text-button copy-btn" type="button">Copy</button>
+              <button class="text-button reply-btn" type="button">Reply</button>
+              <button class="text-button comment-btn" type="button">Comment</button>
+            </div>
+          </header>
+          <div class="message-body"></div>
+          <div class="message-meta-row"></div>
+          <div class="comment-thread"></div>
+        </div>
+      </article>
+    </template>
+
+    <script src="/static/app.js" type="module"></script>
+  </body>
+</html>

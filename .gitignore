@@ -1,0 +1,17 @@
+.env
+.venv/
+env/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+.coverage
+htmlcov/
+
+storage/
+.env.example
+
+.DS_Store
+.KnowForge_Project_Blueprint.docx
