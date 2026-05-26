@@ -27,7 +27,24 @@ class ChatService:
         self.history_compactor = ConversationCompactor(self.llm)
 
     async def answer(self, request: ChatRequest) -> ChatResponse:
-        decision = self.indexer.route(request.question, allow_fallback=request.allow_fallback)
+        if request.context_page_slugs:
+            decision = RouteDecision(
+                route="wiki",
+                page_slugs=request.context_page_slugs,
+                confidence=1.0,
+                reason="User selected explicit wiki page context.",
+                difficulty=self.indexer.classify_difficulty(request.question, []),
+            )
+        elif request.intent == "direct":
+            decision = RouteDecision(
+                route="direct",
+                page_slugs=[],
+                confidence=1.0,
+                reason="User requested direct assistant mode.",
+                difficulty="easy",
+            )
+        else:
+            decision = self.indexer.route(request.question, allow_fallback=request.allow_fallback)
         trace = [
             AgentTrace(
                 agent="router",
@@ -41,11 +58,17 @@ class ChatService:
             char_budget=settings.chat_history_char_budget,
             keep_last=settings.chat_history_keep_last,
         )
-        context, used_pages = self.indexer.build_context(
-            decision.page_slugs,
-            request.question,
-            char_budget=settings.wiki_context_char_budget,
-        )
+        if request.context_page_slugs or request.intent == "wiki":
+            context, used_pages = self.indexer.build_exact_page_context(
+                decision.page_slugs,
+                char_budget=settings.wiki_context_char_budget,
+            )
+        else:
+            context, used_pages = self.indexer.build_context(
+                decision.page_slugs,
+                request.question,
+                char_budget=settings.wiki_context_char_budget,
+            )
         fallback_context, fallback_ids = ("", [])
         if decision.route == "fallback" and decision.page_slugs and request.allow_fallback:
             fallback_context, fallback_ids = self._raw_fallback_context(request.question)
@@ -74,6 +97,7 @@ class ChatService:
                 )
             )
             return ChatResponse(
+                session_id=request.session_id,
                 answer=answer,
                 route="direct",
                 difficulty=decision.difficulty,
@@ -114,6 +138,7 @@ class ChatService:
 
         citations = self._citations(answer, used_pages, fallback_ids)
         return ChatResponse(
+            session_id=request.session_id,
             answer=answer,
             route=decision.route,
             difficulty=decision.difficulty,

@@ -1,67 +1,83 @@
 # KnowForge
 
-KnowForge is a FastAPI-based backend for a self-hosted institutional memory engine.
+KnowForge is a FastAPI LLMWiki assistant with PDF ingestion, Groq-backed answers,
+user login, email verification, Postgres chat persistence, and a clean dashboard UI.
 
-This repository contains the FastAPI backend foundation plus the first LLMWiki engine slice:
-PDF ingestion, Markdown wiki compilation, wiki-first chat routing, Groq-backed answering,
-hard-question planning/verification, compact context loading, and knowledge-gap logging.
+## What It Does
 
-## Project Shape
+- Upload PDFs up to 5 MB and compile them into Markdown wiki pages.
+- Ask questions that use wiki context when relevant, or Groq directly for general chat.
+- Click a wiki page to summarize that exact page with the correct context.
+- Register, verify email, login, and keep user data isolated.
+- Store chat sessions and messages in Postgres.
+- Keep runtime wiki/source files under `storage/users/{user_id}/`.
 
-```text
-app/
-  api/        HTTP routes
-  core/       settings and shared application setup
-  llmwiki/    Markdown wiki, ingestion, routing, Groq, chat orchestration
-  schemas/    Pydantic API contracts
-tests/        automated tests
-```
-
-## Local Setup
+## Setup
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
+python3 -m venv env
+source env/bin/activate
 pip install -e ".[dev]"
+alembic upgrade head
 uvicorn app.main:app --reload
 ```
 
-API docs will be available at `http://localhost:8000/docs`.
+Open:
 
-The dashboard UI is served from the backend root:
-
-```bash
+```text
 http://localhost:8000/
 ```
 
-## Main Endpoints
+API docs:
 
-- `GET /api/v1/health`
-- `POST /api/v1/sources/upload` uploads a PDF, capped at 5 MB, and compiles wiki content.
-- `GET /api/v1/wiki/index` returns the compact routing index.
-- `GET /api/v1/wiki/pages` lists generated wiki pages.
-- `GET /api/v1/wiki/pages/{slug}` reads a page.
-- `PUT /api/v1/wiki/pages/{slug}` manually creates or updates a page.
-- `POST /api/v1/wiki/compact` compacts oversized wiki pages.
-- `POST /api/v1/chat` answers from the wiki first, then fallback evidence if needed.
-
-When the wiki has no relevant context, KnowForge falls back to a direct Groq assistant
-answer for general chat instead of returning a dead-end no-answer response. It still avoids
-pretending to know unsupported internal facts.
+```text
+http://localhost:8000/docs
+```
 
 ## Configuration
 
-Set `GROQ_API_KEY` in `.env` for Groq-backed compile, planning, answering, and verification.
-Without it, the backend still works in local deterministic mode for development and tests.
+Copy `.env.example` to `.env` and set values as needed.
 
-Runtime wiki/source files are stored under `KNOWFORGE_STORAGE_PATH`, defaulting to `storage/`.
+Required for LLM answers:
 
-## Next Build Direction
+```env
+GROQ_API_KEY=
+GROQ_MODEL=llama-3.3-70b-versatile
+```
 
-Add the next pieces only when we start implementing them:
+Default local Postgres:
 
-1. Persistent users, auth, and organization workspaces.
-2. Database models and migrations.
-3. Background job queue for large ingestion/compilation runs.
-4. Pinecone or another vector fallback provider.
-5. Frontend dashboard and chat UI.
+```env
+DB_HOST=localhost
+DB_PORT=5432
+DB_NAME=knowforge
+DB_USER=knowforge
+DB_PASSWORD=knowforge
+```
+
+Email verification uses SMTP when configured. If `SMTP_HOST` is empty, verification
+codes are logged by the backend for local development.
+
+Use a strong `JWT_SECRET_KEY` before real deployment.
+
+## Main Endpoints
+
+- `POST /api/v1/auth/register`
+- `POST /api/v1/auth/verify-email`
+- `POST /api/v1/auth/resend-code`
+- `POST /api/v1/auth/login`
+- `GET /api/v1/auth/me`
+- `POST /api/v1/sources/upload`
+- `GET /api/v1/wiki/pages`
+- `GET /api/v1/wiki/pages/{slug}`
+- `POST /api/v1/chat`
+- `GET /api/v1/chat/sessions`
+- `GET /api/v1/chat/sessions/{session_id}`
+
+## Checks
+
+```bash
+pytest
+ruff check .
+python3 -m py_compile app/**/*.py
+```

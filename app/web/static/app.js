@@ -1,15 +1,23 @@
 const API = {
+  me: "/api/v1/auth/me",
+  login: "/api/v1/auth/login",
+  register: "/api/v1/auth/register",
+  verify: "/api/v1/auth/verify-email",
+  resend: "/api/v1/auth/resend-code",
   chat: "/api/v1/chat",
+  sessions: "/api/v1/chat/sessions",
   upload: "/api/v1/sources/upload",
   wikiPages: "/api/v1/wiki/pages",
-  wikiIndex: "/api/v1/wiki/index",
   compact: "/api/v1/wiki/compact",
 };
 
-const STORAGE_KEY = "knowforge.chatboard.v3";
+const AUTH_KEY = "knowforge.auth.v1";
 const MAX_UPLOAD_BYTES = 5 * 1024 * 1024;
 
 const state = {
+  token: null,
+  user: null,
+  currentSessionId: null,
   messages: [],
   pendingReplyTo: null,
   pendingCommentFor: null,
@@ -17,6 +25,21 @@ const state = {
 };
 
 const els = {
+  authScreen: document.querySelector("#authScreen"),
+  authError: document.querySelector("#authError"),
+  showLoginBtn: document.querySelector("#showLoginBtn"),
+  showRegisterBtn: document.querySelector("#showRegisterBtn"),
+  loginForm: document.querySelector("#loginForm"),
+  registerForm: document.querySelector("#registerForm"),
+  verifyForm: document.querySelector("#verifyForm"),
+  loginEmail: document.querySelector("#loginEmail"),
+  loginPassword: document.querySelector("#loginPassword"),
+  registerName: document.querySelector("#registerName"),
+  registerEmail: document.querySelector("#registerEmail"),
+  registerPassword: document.querySelector("#registerPassword"),
+  verifyEmail: document.querySelector("#verifyEmail"),
+  verifyCode: document.querySelector("#verifyCode"),
+  resendCodeBtn: document.querySelector("#resendCodeBtn"),
   chatBoard: document.querySelector("#chatBoard"),
   chatForm: document.querySelector("#chatForm"),
   messageInput: document.querySelector("#messageInput"),
@@ -31,9 +54,13 @@ const els = {
   uploadError: document.querySelector("#uploadError"),
   wikiList: document.querySelector("#wikiList"),
   emptyWiki: document.querySelector("#emptyWiki"),
+  sessionList: document.querySelector("#sessionList"),
+  emptySessions: document.querySelector("#emptySessions"),
   refreshWikiBtn: document.querySelector("#refreshWikiBtn"),
+  refreshSessionsBtn: document.querySelector("#refreshSessionsBtn"),
   newChatBtn: document.querySelector("#newChatBtn"),
   compactWikiBtn: document.querySelector("#compactWikiBtn"),
+  logoutBtn: document.querySelector("#logoutBtn"),
   networkState: document.querySelector("#networkState"),
 };
 
@@ -41,17 +68,19 @@ function uid() {
   return crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
 }
 
-function loadState() {
+function loadAuth() {
   try {
-    const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
-    state.messages = Array.isArray(saved.messages) ? saved.messages : [];
+    const saved = JSON.parse(localStorage.getItem(AUTH_KEY) || "{}");
+    state.token = saved.token || null;
   } catch {
-    state.messages = [];
+    state.token = null;
   }
 }
 
-function saveState() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify({ messages: state.messages.slice(-120) }));
+function saveAuth(token) {
+  state.token = token;
+  if (token) localStorage.setItem(AUTH_KEY, JSON.stringify({ token }));
+  else localStorage.removeItem(AUTH_KEY);
 }
 
 function escapeHtml(value) {
@@ -119,13 +148,16 @@ function toast(message, type = "info") {
 async function apiFetch(url, options = {}) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), options.timeout || 45000);
+  const headers = new Headers(options.headers || {});
+  if (state.token) headers.set("Authorization", `Bearer ${state.token}`);
   try {
-    const response = await fetch(url, { ...options, signal: controller.signal });
+    const response = await fetch(url, { ...options, headers, signal: controller.signal });
     const contentType = response.headers.get("content-type") || "";
     const body = contentType.includes("application/json")
       ? await response.json()
       : await response.text();
     if (!response.ok) {
+      if (response.status === 401) logout(false);
       const message = body?.error?.message || body?.detail || body || `Request failed: ${response.status}`;
       throw new Error(Array.isArray(message) ? message.map((item) => item.msg).join(", ") : message);
     }
@@ -140,6 +172,44 @@ async function apiFetch(url, options = {}) {
   }
 }
 
+function showAuthError(message) {
+  els.authError.textContent = message;
+  els.authError.hidden = false;
+}
+
+function setAuthMode(mode) {
+  els.authError.hidden = true;
+  els.loginForm.hidden = mode !== "login";
+  els.registerForm.hidden = mode !== "register";
+  els.verifyForm.hidden = mode !== "verify";
+  els.showLoginBtn.classList.toggle("active", mode === "login");
+  els.showRegisterBtn.classList.toggle("active", mode === "register");
+}
+
+function showApp(isAuthed) {
+  els.authScreen.hidden = isAuthed;
+  document.querySelector(".app-shell").hidden = !isAuthed;
+}
+
+async function bootstrapAuth() {
+  loadAuth();
+  if (!state.token) {
+    showApp(false);
+    setAuthMode("login");
+    return;
+  }
+  try {
+    state.user = await apiFetch(API.me);
+    showApp(true);
+    await Promise.all([loadWikiPages(), loadSessions()]);
+    renderChat();
+  } catch {
+    saveAuth(null);
+    showApp(false);
+    setAuthMode("login");
+  }
+}
+
 function addMessage(message) {
   state.messages.push({
     id: uid(),
@@ -147,7 +217,6 @@ function addMessage(message) {
     comments: [],
     ...message,
   });
-  saveState();
   renderChat();
 }
 
@@ -155,7 +224,6 @@ function updateMessage(id, patch) {
   const item = state.messages.find((message) => message.id === id);
   if (!item) return;
   Object.assign(item, patch);
-  saveState();
   renderChat();
 }
 
@@ -163,37 +231,18 @@ function addComment(parentId, role, content) {
   const parent = state.messages.find((message) => message.id === parentId);
   if (!parent) return;
   parent.comments = parent.comments || [];
-  parent.comments.push({
-    id: uid(),
-    role,
-    content,
-    createdAt: new Date().toISOString(),
-  });
-  saveState();
+  parent.comments.push({ id: uid(), role, content, createdAt: new Date().toISOString() });
   renderChat();
 }
 
-function compactHistoryForApi() {
-  return state.messages
-    .filter((message) => !message.pending)
-    .slice(-24)
-    .map((message) => ({
-      role: message.role === "assistant" ? "assistant" : "user",
-      content: message.content,
-    }));
-}
-
-async function sendMessage(content) {
+async function sendMessage(content, options = {}) {
   if (!content.trim() || state.sending) return;
   const parentId = state.pendingReplyTo || state.pendingCommentFor;
   const isComment = Boolean(state.pendingCommentFor);
   clearReplyMode();
 
-  if (isComment && parentId) {
-    addComment(parentId, "user", content);
-  } else {
-    addMessage({ role: "user", content, parentId });
-  }
+  if (isComment && parentId) addComment(parentId, "user", content);
+  else addMessage({ role: "user", content, parentId });
 
   const assistantId = uid();
   state.messages.push({
@@ -207,30 +256,29 @@ async function sendMessage(content) {
   });
   state.sending = true;
   els.sendBtn.disabled = true;
-  saveState();
   renderChat();
 
   try {
-    const question = parentId
-      ? `Replying in thread to message ${parentId}:\n\n${content}`
-      : content;
+    const question = parentId ? `Replying in thread:\n\n${content}` : content;
     const response = await apiFetch(API.chat, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         question,
-        messages: compactHistoryForApi(),
+        session_id: state.currentSessionId,
+        context_page_slugs: options.contextPageSlugs || [],
+        intent: options.intent || "auto",
         allow_fallback: true,
       }),
     });
+    state.currentSessionId = response.session_id || state.currentSessionId;
     updateMessage(assistantId, {
       content: response.answer,
       pending: false,
       citations: response.citations || [],
       usedPages: response.used_pages || [],
-      agentTrace: response.agent_trace || [],
     });
-    renderInspector(response);
+    await loadSessions();
   } catch (error) {
     updateMessage(assistantId, {
       content: `I could not complete that request.\n\n${error.message}`,
@@ -251,10 +299,7 @@ function renderChat() {
     welcome.className = "welcome-card";
     welcome.innerHTML = `
       <h3>Start a KnowForge conversation</h3>
-      <p>
-        Ask a direct question, upload a PDF to build the wiki, or reply/comment on any answer.
-        KnowForge answers naturally, and uses your wiki with citations when source context exists.
-      </p>
+      <p>Ask anything, upload a PDF, or click a wiki page for a grounded summary.</p>
     `;
     els.chatBoard.appendChild(welcome);
     return;
@@ -271,7 +316,7 @@ function renderChat() {
       minute: "2-digit",
     });
     node.querySelector(".message-body").innerHTML = message.pending
-      ? '<p class="empty-mini">Thinking through wiki, fallback, and agent checks...</p>'
+      ? '<p class="empty-mini">Thinking through wiki context and conversation memory...</p>'
       : renderMarkdown(message.content);
     node.querySelector(".copy-btn").addEventListener("click", () => {
       navigator.clipboard?.writeText(message.content);
@@ -281,11 +326,8 @@ function renderChat() {
     node.querySelector(".comment-btn").addEventListener("click", () => setReplyMode(message.id, true));
 
     const meta = node.querySelector(".message-meta-row");
-    if (message.citations?.length) {
-      meta.appendChild(chip(`${message.citations.length} citation(s)`));
-    } else {
-      meta.remove();
-    }
+    if (message.citations?.length) meta.appendChild(chip(`${message.citations.length} citation(s)`));
+    else meta.remove();
 
     const thread = node.querySelector(".comment-thread");
     for (const comment of message.comments || []) {
@@ -309,10 +351,6 @@ function chip(label) {
   return item;
 }
 
-function renderInspector(response) {
-  void response;
-}
-
 function setReplyMode(messageId, commentMode) {
   state.pendingReplyTo = commentMode ? null : messageId;
   state.pendingCommentFor = commentMode ? messageId : null;
@@ -330,6 +368,38 @@ function clearReplyMode() {
   els.replyBanner.hidden = true;
 }
 
+async function loadSessions() {
+  const sessions = await apiFetch(API.sessions);
+  els.sessionList.innerHTML = "";
+  els.emptySessions.hidden = sessions.length > 0;
+  for (const session of sessions) {
+    const item = document.createElement("button");
+    item.type = "button";
+    item.className = "wiki-item";
+    if (session.id === state.currentSessionId) item.classList.add("active");
+    item.innerHTML = `
+      <strong>${escapeHtml(session.title)}</strong>
+      <span>${escapeHtml(session.summary || new Date(session.updated_at).toLocaleString())}</span>
+    `;
+    item.addEventListener("click", () => loadSession(session.id));
+    els.sessionList.appendChild(item);
+  }
+}
+
+async function loadSession(sessionId) {
+  const payload = await apiFetch(`${API.sessions}/${sessionId}`);
+  state.currentSessionId = sessionId;
+  state.messages = payload.messages.map((message) => ({
+    id: message.id,
+    role: message.role,
+    content: message.content,
+    createdAt: message.created_at,
+    comments: [],
+  }));
+  renderChat();
+  await loadSessions();
+}
+
 async function loadWikiPages() {
   try {
     const pages = await apiFetch(API.wikiPages);
@@ -344,7 +414,10 @@ async function loadWikiPages() {
         <span>${escapeHtml(page.summary || page.slug)}</span>
       `;
       item.addEventListener("click", () =>
-        sendMessage(`Summarize the wiki page "${page.slug}" and explain what it is useful for.`),
+        sendMessage(`Summarize the wiki page "${page.slug}" and explain what it is useful for.`, {
+          intent: "wiki",
+          contextPageSlugs: [page.slug],
+        }),
       );
       els.wikiList.appendChild(item);
     }
@@ -371,11 +444,7 @@ async function uploadPdf(file) {
   els.uploadState.textContent = "Uploading";
   els.uploadState.classList.remove("muted");
   try {
-    const response = await apiFetch(API.upload, {
-      method: "POST",
-      body: form,
-      timeout: 90000,
-    });
+    const response = await apiFetch(API.upload, { method: "POST", body: form, timeout: 90000 });
     toast(`Uploaded ${response.filename}. Wiki page: ${response.wiki_page_slug || "not compiled"}`);
     els.uploadState.textContent = "Ready";
     await loadWikiPages();
@@ -391,7 +460,91 @@ function showUploadError(message) {
   toast(message, "error");
 }
 
+function logout(showToast = true) {
+  saveAuth(null);
+  state.user = null;
+  state.currentSessionId = null;
+  state.messages = [];
+  showApp(false);
+  setAuthMode("login");
+  if (showToast) toast("Logged out.");
+}
+
 function bindEvents() {
+  els.showLoginBtn.addEventListener("click", () => setAuthMode("login"));
+  els.showRegisterBtn.addEventListener("click", () => setAuthMode("register"));
+
+  els.loginForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      const response = await apiFetch(API.login, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: els.loginEmail.value, password: els.loginPassword.value }),
+      });
+      saveAuth(response.access_token);
+      state.user = response.user;
+      showApp(true);
+      await Promise.all([loadWikiPages(), loadSessions()]);
+      renderChat();
+    } catch (error) {
+      showAuthError(error.message);
+      if (/verify/i.test(error.message)) {
+        els.verifyEmail.value = els.loginEmail.value;
+        setAuthMode("verify");
+      }
+    }
+  });
+
+  els.registerForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      await apiFetch(API.register, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: els.registerName.value,
+          email: els.registerEmail.value,
+          password: els.registerPassword.value,
+        }),
+      });
+      els.verifyEmail.value = els.registerEmail.value;
+      setAuthMode("verify");
+      toast("Verification code sent.");
+    } catch (error) {
+      showAuthError(error.message);
+    }
+  });
+
+  els.verifyForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      await apiFetch(API.verify, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: els.verifyEmail.value, code: els.verifyCode.value }),
+      });
+      els.loginEmail.value = els.verifyEmail.value;
+      setAuthMode("login");
+      toast("Email verified. Login now.");
+    } catch (error) {
+      showAuthError(error.message);
+    }
+  });
+
+  els.resendCodeBtn.addEventListener("click", async () => {
+    try {
+      await apiFetch(API.resend, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: els.verifyEmail.value }),
+      });
+      toast("New verification code sent.");
+    } catch (error) {
+      showAuthError(error.message);
+    }
+  });
+
   els.chatForm.addEventListener("submit", async (event) => {
     event.preventDefault();
     const content = els.messageInput.value.trim();
@@ -410,9 +563,10 @@ function bindEvents() {
 
   els.cancelReplyBtn.addEventListener("click", clearReplyMode);
   els.refreshWikiBtn.addEventListener("click", loadWikiPages);
+  els.refreshSessionsBtn.addEventListener("click", loadSessions);
   els.newChatBtn.addEventListener("click", () => {
+    state.currentSessionId = null;
     state.messages = [];
-    saveState();
     renderChat();
     toast("Started a new chat.");
   });
@@ -424,6 +578,7 @@ function bindEvents() {
       toast(error.message, "error");
     }
   });
+  els.logoutBtn.addEventListener("click", () => logout());
 
   els.pdfInput.addEventListener("change", () => uploadPdf(els.pdfInput.files?.[0]));
   for (const eventName of ["dragenter", "dragover"]) {
@@ -446,7 +601,6 @@ function resizeTextarea() {
   els.messageInput.style.height = `${Math.min(180, els.messageInput.scrollHeight)}px`;
 }
 
-loadState();
 bindEvents();
-renderChat();
-loadWikiPages();
+showApp(false);
+bootstrapAuth();

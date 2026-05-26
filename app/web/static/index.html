@@ -7,6 +7,45 @@
     <link rel="stylesheet" href="/static/styles.css" />
   </head>
   <body>
+    <section id="authScreen" class="auth-screen">
+      <div class="auth-card">
+        <div class="brand-block">
+          <div class="brand-mark">K</div>
+          <div>
+            <h1>KnowForge</h1>
+            <p>Private LLMWiki assistant</p>
+          </div>
+        </div>
+
+        <div class="auth-tabs">
+          <button id="showLoginBtn" class="auth-tab active" type="button">Login</button>
+          <button id="showRegisterBtn" class="auth-tab" type="button">Register</button>
+        </div>
+
+        <form id="loginForm" class="auth-form">
+          <label>Email<input id="loginEmail" type="email" autocomplete="email" required /></label>
+          <label>Password<input id="loginPassword" type="password" autocomplete="current-password" required /></label>
+          <button class="primary-button" type="submit">Login</button>
+        </form>
+
+        <form id="registerForm" class="auth-form" hidden>
+          <label>Name<input id="registerName" type="text" autocomplete="name" required minlength="2" /></label>
+          <label>Email<input id="registerEmail" type="email" autocomplete="email" required /></label>
+          <label>Password<input id="registerPassword" type="password" autocomplete="new-password" required minlength="8" /></label>
+          <button class="primary-button" type="submit">Create Account</button>
+        </form>
+
+        <form id="verifyForm" class="auth-form" hidden>
+          <p class="auth-note">Enter the verification code sent to your email.</p>
+          <label>Email<input id="verifyEmail" type="email" autocomplete="email" required /></label>
+          <label>Verification Code<input id="verifyCode" type="text" inputmode="numeric" required /></label>
+          <button class="primary-button" type="submit">Verify Email</button>
+          <button id="resendCodeBtn" class="secondary-button" type="button">Resend Code</button>
+        </form>
+        <div id="authError" class="inline-error" hidden></div>
+      </div>
+    </section>
+
     <div class="app-shell">
       <aside class="sidebar" aria-label="Workspace">
         <div class="brand-block">
@@ -43,6 +82,17 @@
           <div id="wikiList" class="wiki-list"></div>
           <div id="emptyWiki" class="empty-mini">Upload a PDF or create a page to start.</div>
         </section>
+
+        <section class="panel session-panel">
+          <div class="panel-heading">
+            <h2>Chats</h2>
+            <button id="refreshSessionsBtn" class="icon-button" type="button" title="Refresh chats">
+              <span>↻</span>
+            </button>
+          </div>
+          <div id="sessionList" class="wiki-list"></div>
+          <div id="emptySessions" class="empty-mini">No saved chats yet.</div>
+        </section>
       </aside>
 
       <main class="chat-area">
@@ -54,6 +104,7 @@
           <div class="topbar-actions">
             <button id="newChatBtn" class="secondary-button" type="button">New Chat</button>
             <button id="compactWikiBtn" class="secondary-button" type="button">Compact Wiki</button>
+            <button id="logoutBtn" class="secondary-button" type="button">Logout</button>
           </div>
         </header>
 

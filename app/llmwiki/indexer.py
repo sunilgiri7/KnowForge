@@ -143,6 +143,34 @@ class WikiIndexer:
                 break
         return "\n\n---\n\n".join(blocks), used
 
+    def build_exact_page_context(
+        self,
+        slugs: list[str],
+        *,
+        char_budget: int,
+    ) -> tuple[str, list[str]]:
+        blocks: list[str] = []
+        used: list[str] = []
+        remaining = char_budget
+        for slug in slugs:
+            page = self.store.read_page(slug, prefer_compact=False)
+            block = (
+                f"[wiki:{page.meta.slug}] {page.meta.title}\n"
+                f"Summary: {page.meta.summary}\n"
+                f"Tags: {', '.join(page.meta.tags)}\n"
+                f"Sources: {', '.join(page.meta.source_ids)}\n\n"
+                f"{page.content}"
+            )
+            if len(block) > remaining:
+                block = trim_to_chars(block, remaining)
+            if block.strip():
+                blocks.append(block)
+                used.append(page.meta.slug)
+                remaining -= len(block)
+            if remaining <= 800:
+                break
+        return "\n\n---\n\n".join(blocks), used
+
     @staticmethod
     def needs_exact_evidence(question: str) -> bool:
         return bool(set(tokenize(question)) & EXACT_EVIDENCE_TERMS)

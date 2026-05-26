@@ -24,6 +24,9 @@ class WikiStore:
         self._lock = RLock()
         self.ensure_ready()
 
+    def for_user(self, user_id: str) -> WikiStore:
+        return WikiStore(self.root / "users" / user_id)
+
     def ensure_ready(self) -> None:
         for path in (self.wiki_dir, self.raw_dir, self.compact_dir, self.events_dir):
             path.mkdir(parents=True, exist_ok=True)
