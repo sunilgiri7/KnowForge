@@ -63,9 +63,10 @@ class ChatRequest(BaseModel):
     messages: list[ChatMessage] = Field(default_factory=list, max_length=80)
     allow_fallback: bool = True
     session_id: str | None = None
+    parent_id: str | None = Field(default=None, max_length=80)
+    interaction: Literal["message", "reply", "comment"] = "message"
     context_page_slugs: list[str] = Field(default_factory=list, max_length=8)
     intent: Literal["auto", "wiki", "direct"] = "auto"
-    user_context: str | None = Field(default=None, max_length=1_000)
 
 
 class AgentTrace(BaseModel):
@@ -162,6 +163,7 @@ class StoredChatMessage(BaseModel):
     role: Literal["user", "assistant", "system"]
     content: str
     parent_id: str | None = None
+    interaction: Literal["message", "reply", "comment"] = "message"
     route: str | None = None
     created_at: datetime
 

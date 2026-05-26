@@ -107,6 +107,14 @@ Say clearly when context is incomplete, stale, or conflicting.
 If the context cannot answer, say that instead of guessing.
 If the user selected a wiki page, summarize what the page contains, why it is useful,
 and the most important facts from that page.
+If the user asks broad memory questions like "who am I", "what do you know about me",
+or "tell me about myself", use the retrieved wiki pages as the user's uploaded memory.
+Do not claim you know nothing when relevant wiki context was provided. Also do not assert
+that a profile is definitely the authenticated user unless the context itself supports it;
+phrase it as "your uploaded wiki describes..." when needed.
+When COMPACTED_CHAT_HISTORY contains selected thread context, answer as a direct reply in
+that thread. Respect the parent message, avoid repeating unrelated earlier chat, and keep
+the response connected to the comment/reply the user selected.
 
 QUESTION:
 {question}
@@ -148,6 +156,7 @@ wiki, say that the wiki has no supporting context yet and explain what source sh
 Do not pretend to know internal facts that were not provided.
 Keep the answer concise unless the user asks for depth.
 If the user asks a general question, answer from your own knowledge directly.
+If the history includes selected thread context, answer as a focused reply to that message.
 
 QUESTION:
 {question}

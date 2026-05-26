@@ -5,12 +5,12 @@ import re
 from app.core.config import settings
 from app.llmwiki.compaction import ConversationCompactor
 from app.llmwiki.groq import GroqClient
+from app.llmwiki.harness import AIHarness
 from app.llmwiki.indexer import WikiIndexer
 from app.llmwiki.prompts import (
     ANSWER_PROMPT,
     DIRECT_CHAT_PROMPT,
     PLANNER_PROMPT,
-    QUERY_REWRITE_PROMPT,
     VERIFIER_PROMPT,
 )
 from app.llmwiki.storage import WikiStore
@@ -30,6 +30,7 @@ class ChatService:
         self.store = store
         self.llm = llm or GroqClient()
         self.indexer = WikiIndexer(store)
+        self.harness = AIHarness(store, self.indexer, self.llm)
         self.history_compactor = ConversationCompactor(self.llm)
 
     async def answer(self, request: ChatRequest) -> ChatResponse:
@@ -58,79 +59,12 @@ class ChatService:
                 knowledge_gap_created=False,
                 agent_trace=trace,
             )
-        retrieval_question = request.question
-        route_hint = False
-        candidate_queries = [request.question]
-        if self._is_self_profile_question(request.question):
-            route_hint = True
-            profile_query = self._profile_query(request)
-            retrieval_question = profile_query
-            candidate_queries.append(profile_query)
-        if not request.context_page_slugs and request.intent == "auto":
-            rewritten_question, rewrite_hint = await self._rewrite_for_retrieval(
-                request.question,
-                self._history_with_user_context(history, request.user_context),
-            )
-            if rewritten_question != request.question:
-                candidate_queries.append(rewritten_question)
-            if not self._is_self_profile_question(request.question):
-                retrieval_question = rewritten_question
-            route_hint = route_hint or rewrite_hint
-        if request.context_page_slugs:
-            decision = RouteDecision(
-                route="wiki",
-                page_slugs=request.context_page_slugs,
-                confidence=1.0,
-                reason="User selected explicit wiki page context.",
-                difficulty=self.indexer.classify_difficulty(request.question, []),
-            )
-        elif request.intent == "direct":
-            decision = RouteDecision(
-                route="direct",
-                page_slugs=[],
-                confidence=1.0,
-                reason="User requested direct assistant mode.",
-                difficulty="easy",
-            )
-        else:
-            decision = self.indexer.route(
-                retrieval_question,
-                allow_fallback=request.allow_fallback,
-                candidate_queries=candidate_queries,
-            )
-            if route_hint and decision.route == "direct":
-                candidates = self.indexer.find_candidates(
-                    retrieval_question,
-                    limit=3,
-                    candidate_queries=candidate_queries,
-                )
-                if candidates:
-                    decision = RouteDecision(
-                        route="wiki",
-                        page_slugs=[candidate.slug for candidate in candidates],
-                        confidence=max(0.35, candidates[0].score),
-                        reason="Query rewrite indicated likely wiki context.",
-                        difficulty=self.indexer.classify_difficulty(retrieval_question, candidates),
-                    )
-        trace = [
-            AgentTrace(
-                agent="router",
-                action=decision.route,
-                confidence=decision.confidence,
-                notes=decision.reason,
-            )
-        ]
-        if request.context_page_slugs or request.intent == "wiki":
-            context, used_pages = self.indexer.build_exact_page_context(
-                decision.page_slugs,
-                char_budget=settings.wiki_context_char_budget,
-            )
-        else:
-            context, used_pages = self.indexer.build_context(
-                decision.page_slugs,
-                retrieval_question,
-                char_budget=settings.wiki_context_char_budget,
-            )
+        plan = await self.harness.plan(request, history)
+        decision = plan.decision
+        retrieval_question = plan.retrieval_question
+        context = plan.context
+        used_pages = plan.used_pages
+        trace = plan.traces
         fallback_context, fallback_ids = ("", [])
         if decision.route == "fallback" and decision.page_slugs and request.allow_fallback:
             fallback_context, fallback_ids = self._raw_fallback_context(request.question)
@@ -219,37 +153,6 @@ class ChatService:
                 pass
         return self._local_answer(question, context)
 
-    async def _rewrite_for_retrieval(self, question: str, history: str) -> tuple[str, bool]:
-        if not self.llm.available or not history.strip():
-            return question, False
-        try:
-            payload = await self.llm.generate_json(
-                QUERY_REWRITE_PROMPT.format(question=question, history=history),
-                temperature=0.05,
-            )
-            rewritten = str(payload.get("rewritten_question") or question).strip()
-            should_use_wiki = bool(payload.get("should_use_wiki"))
-            return rewritten or question, should_use_wiki
-        except Exception:
-            return question, False
-
-    @staticmethod
-    def _is_self_profile_question(question: str) -> bool:
-        lowered = question.lower()
-        compact = " ".join(lowered.split())
-        patterns = (
-            "about me",
-            "know about me",
-            "who am i",
-            "my profile",
-            "my background",
-            "my experience",
-            "my skills",
-            "my resume",
-            "tell me about myself",
-        )
-        return any(pattern in compact for pattern in patterns)
-
     @staticmethod
     def _is_gratitude(question: str) -> bool:
         if not question:
@@ -267,22 +170,6 @@ class ChatService:
         )
         # Only treat as gratitude when the message is short (avoids false positives)
         return any(p in q for p in patterns) and len(q.split()) <= 6
-
-    @staticmethod
-    def _history_with_user_context(history: str, user_context: str | None) -> str:
-        if not user_context:
-            return history
-        return f"{user_context}\n\n{history}" if history else user_context
-
-    @staticmethod
-    def _profile_query(request: ChatRequest) -> str:
-        parts = [
-            request.question,
-            "user profile resume background experience skills projects education contact",
-        ]
-        if request.user_context:
-            parts.append(request.user_context)
-        return " ".join(parts)
 
     async def _generate_direct_answer(
         self,

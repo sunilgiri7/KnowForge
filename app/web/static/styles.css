@@ -436,6 +436,26 @@ button {
   box-shadow: 0 8px 28px rgba(20, 37, 35, 0.05);
 }
 
+.thread-node {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-width: 0;
+}
+
+.thread-node > .message-card.user {
+  align-self: flex-end;
+}
+
+.thread-node > .message-card.assistant {
+  align-self: flex-start;
+}
+
+.comment-thread .thread-node > .message-card {
+  width: 100%;
+  box-shadow: none;
+}
+
 .message-card.user {
   align-self: flex-end;
   width: min(760px, 88%);
@@ -467,6 +487,17 @@ button {
   align-items: center;
   justify-content: space-between;
   gap: 10px;
+}
+
+.interaction-label {
+  display: inline-flex;
+  margin-left: 8px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 750;
 }
 
 .message-actions {
@@ -590,23 +621,14 @@ button {
 
 .comment-thread {
   display: grid;
-  gap: 8px;
-  margin-top: 12px;
-  padding-left: 12px;
-  border-left: 2px solid var(--line);
+  gap: 10px;
+  margin-top: 14px;
+  padding-left: 16px;
+  border-left: 2px solid var(--accent-soft);
 }
 
-.comment {
-  padding: 9px 10px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
+.comment-thread .message-card {
   background: #fbfcfc;
-}
-
-.comment strong {
-  display: block;
-  margin-bottom: 4px;
-  font-size: 12px;
 }
 
 .composer-wrap {

@@ -76,6 +76,7 @@ class ChatMessageRecord(Base):
     role: Mapped[str] = mapped_column(String(20))
     content: Mapped[str] = mapped_column(Text)
     parent_id: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    interaction: Mapped[str] = mapped_column(String(20), default="message", nullable=False)
     route: Mapped[str | None] = mapped_column(String(40), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 

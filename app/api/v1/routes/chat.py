@@ -7,7 +7,13 @@ from app.api.deps import get_current_user, wiki_store_for_user
 from app.db.models import User
 from app.db.session import get_db
 from app.llmwiki.chat import ChatService
-from app.schemas.llmwiki import ChatRequest, ChatResponse, ChatSessionItem, ChatSessionMessages
+from app.schemas.llmwiki import (
+    ChatMessage,
+    ChatRequest,
+    ChatResponse,
+    ChatSessionItem,
+    ChatSessionMessages,
+)
 from app.services.chat_sessions import (
     add_message,
     compact_session_if_needed,
@@ -15,6 +21,7 @@ from app.services.chat_sessions import (
     get_session_messages,
     history_for_session,
     list_user_sessions,
+    thread_context_for_parent,
 )
 
 router = APIRouter(prefix="/chat", tags=["chat"])
@@ -28,12 +35,21 @@ async def chat(
 ) -> ChatResponse:
     session = get_or_create_session(db, user, request.session_id, request.question)
     request.session_id = session.id
-    request.user_context = (
-        "The user is authenticated and may ask about their own profile, background, or uploaded "
-        "wiki documents. Prefer relevant user-specific wiki pages when answering personal questions."
-    )
+    if request.parent_id and request.interaction == "message":
+        request.interaction = "reply"
+    thread_context = thread_context_for_parent(db, user, session, request.parent_id)
     request.messages = history_for_session(db, session)
-    add_message(db, user=user, session=session, role="user", content=request.question)
+    if thread_context:
+        request.messages.append(ChatMessage(role="system", content=thread_context))
+    user_message = add_message(
+        db,
+        user=user,
+        session=session,
+        role="user",
+        content=request.question,
+        parent_id=request.parent_id,
+        interaction=request.interaction,
+    )
     response = await ChatService(wiki_store_for_user(user)).answer(request)
     add_message(
         db,
@@ -41,6 +57,8 @@ async def chat(
         session=session,
         role="assistant",
         content=response.answer,
+        parent_id=user_message.id if request.interaction in {"reply", "comment"} else None,
+        interaction=request.interaction,
         route=response.route,
     )
     compact_session_if_needed(db, session)

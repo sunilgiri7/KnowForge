@@ -29,6 +29,7 @@ const state = {
   messages: [],
   pendingReplyTo: null,
   pendingCommentFor: null,
+  pendingMode: "message",
   sending: false,
   thinkingTimers: new Map(),
 };
@@ -237,7 +238,7 @@ function addMessage(message) {
   state.messages.push({
     id: uid(),
     createdAt: new Date().toISOString(),
-    comments: [],
+    interaction: "message",
     ...message,
   });
   renderChat();
@@ -267,22 +268,14 @@ function stopThinking(messageId) {
   state.thinkingTimers.delete(messageId);
 }
 
-function addComment(parentId, role, content) {
-  const parent = state.messages.find((message) => message.id === parentId);
-  if (!parent) return;
-  parent.comments = parent.comments || [];
-  parent.comments.push({ id: uid(), role, content, createdAt: new Date().toISOString() });
-  renderChat();
-}
-
 async function sendMessage(content, options = {}) {
   if (!content.trim() || state.sending) return;
   const parentId = state.pendingReplyTo || state.pendingCommentFor;
-  const isComment = Boolean(state.pendingCommentFor);
+  const interaction = state.pendingCommentFor ? "comment" : state.pendingReplyTo ? "reply" : "message";
   clearReplyMode();
 
-  if (isComment && parentId) addComment(parentId, "user", content);
-  else addMessage({ role: "user", content, parentId });
+  const localUserId = uid();
+  addMessage({ id: localUserId, role: "user", content, parentId, interaction });
 
   const assistantId = uid();
   state.messages.push({
@@ -290,8 +283,8 @@ async function sendMessage(content, options = {}) {
     role: "assistant",
     content: "Thinking...",
     pending: true,
-    parentId,
-    comments: [],
+    parentId: interaction === "message" ? null : localUserId,
+    interaction,
     createdAt: new Date().toISOString(),
     thinkingStep: 0,
   });
@@ -301,13 +294,14 @@ async function sendMessage(content, options = {}) {
   startThinking(assistantId);
 
   try {
-    const question = parentId ? `Replying in thread:\n\n${content}` : content;
     const response = await apiFetch(API.chat, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        question,
+        question: content,
         session_id: state.currentSessionId,
+        parent_id: parentId,
+        interaction,
         context_page_slugs: options.contextPageSlugs || [],
         intent: options.intent || "auto",
         allow_fallback: true,
@@ -321,6 +315,7 @@ async function sendMessage(content, options = {}) {
       usedPages: response.used_pages || [],
     });
     await loadSessions();
+    if (state.currentSessionId) await loadSession(state.currentSessionId, { silent: true });
   } catch (error) {
     updateMessage(assistantId, {
       content: `I could not complete that request.\n\n${error.message}`,
@@ -365,43 +360,62 @@ function renderChat() {
     return;
   }
 
+  const children = new Map();
+  const byId = new Map(state.messages.map((message) => [message.id, message]));
   for (const message of state.messages) {
-    const node = els.template.content.firstElementChild.cloneNode(true);
-    node.classList.add(message.role === "assistant" ? "assistant" : "user");
-    if (message.failed) node.classList.add("failed");
-    node.querySelector(".message-author").textContent =
-      message.role === "assistant" ? "KnowForge Assistant" : "You";
-    node.querySelector(".message-time").textContent = new Date(message.createdAt).toLocaleTimeString([], {
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-    node.querySelector(".message-body").innerHTML = message.pending
-      ? renderThinking(message.thinkingStep || 0)
-      : renderMarkdown(message.content);
-    node.querySelector(".copy-btn").addEventListener("click", () => {
-      navigator.clipboard?.writeText(message.content);
-      toast("Message copied.");
-    });
-    node.querySelector(".reply-btn").addEventListener("click", () => setReplyMode(message.id, false));
-    node.querySelector(".comment-btn").addEventListener("click", () => setReplyMode(message.id, true));
-
-    const meta = node.querySelector(".message-meta-row");
-    if (message.citations?.length) meta.appendChild(chip(`${message.citations.length} citation(s)`));
-    else meta.remove();
-
-    const thread = node.querySelector(".comment-thread");
-    for (const comment of message.comments || []) {
-      const item = document.createElement("div");
-      item.className = "comment";
-      item.innerHTML = `<strong>${comment.role === "assistant" ? "KnowForge" : "You"}</strong>${renderMarkdown(
-        comment.content,
-      )}`;
-      thread.appendChild(item);
-    }
-    if (!(message.comments || []).length) thread.remove();
-    els.chatBoard.appendChild(node);
+    if (!message.parentId) continue;
+    if (!children.has(message.parentId)) children.set(message.parentId, []);
+    children.get(message.parentId).push(message);
+  }
+  const roots = state.messages.filter((message) => !message.parentId || !byId.has(message.parentId));
+  for (const message of roots) {
+    els.chatBoard.appendChild(renderMessageNode(message, children, 0));
   }
   els.chatBoard.scrollTop = els.chatBoard.scrollHeight;
+}
+
+function renderMessageNode(message, children, depth) {
+  const wrapper = document.createElement("div");
+  wrapper.className = `thread-node depth-${Math.min(depth, 4)}`;
+  const node = els.template.content.firstElementChild.cloneNode(true);
+  node.classList.add(message.role === "assistant" ? "assistant" : "user");
+  node.classList.add(`interaction-${message.interaction || "message"}`);
+  if (message.failed) node.classList.add("failed");
+  node.querySelector(".message-author").textContent =
+    message.role === "assistant" ? "KnowForge Assistant" : "You";
+  node.querySelector(".message-time").textContent = new Date(message.createdAt).toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+  const interactionLabel = node.querySelector(".interaction-label");
+  interactionLabel.textContent =
+    message.interaction === "comment" ? "Comment" : message.interaction === "reply" ? "Reply" : "";
+  if (!interactionLabel.textContent) interactionLabel.remove();
+  node.querySelector(".message-body").innerHTML = message.pending
+    ? renderThinking(message.thinkingStep || 0)
+    : renderMarkdown(message.content);
+  node.querySelector(".copy-btn").addEventListener("click", () => {
+    navigator.clipboard?.writeText(message.content);
+    toast("Message copied.");
+  });
+  node.querySelector(".reply-btn").addEventListener("click", () => setReplyMode(message.id, false));
+  node.querySelector(".comment-btn").addEventListener("click", () => setReplyMode(message.id, true));
+
+  const meta = node.querySelector(".message-meta-row");
+  if (message.citations?.length) meta.appendChild(chip(`${message.citations.length} citation(s)`));
+  else meta.remove();
+
+  const thread = node.querySelector(".comment-thread");
+  const childItems = children.get(message.id) || [];
+  if (childItems.length) {
+    for (const child of childItems) {
+      thread.appendChild(renderMessageNode(child, children, depth + 1));
+    }
+  } else {
+    thread.remove();
+  }
+  wrapper.appendChild(node);
+  return wrapper;
 }
 
 function chip(label) {
@@ -414,9 +428,10 @@ function chip(label) {
 function setReplyMode(messageId, commentMode) {
   state.pendingReplyTo = commentMode ? null : messageId;
   state.pendingCommentFor = commentMode ? messageId : null;
-  els.replyLabel.textContent = commentMode
-    ? "Commenting under selected message"
-    : "Replying in selected thread";
+  state.pendingMode = commentMode ? "comment" : "reply";
+  const message = state.messages.find((item) => item.id === messageId);
+  const excerpt = message?.content ? `: ${message.content.slice(0, 90)}` : "";
+  els.replyLabel.textContent = commentMode ? `Commenting${excerpt}` : `Replying${excerpt}`;
   els.replyBanner.hidden = false;
   els.messageInput.focus();
 }
@@ -424,6 +439,7 @@ function setReplyMode(messageId, commentMode) {
 function clearReplyMode() {
   state.pendingReplyTo = null;
   state.pendingCommentFor = null;
+  state.pendingMode = "message";
   els.replyLabel.textContent = "";
   els.replyBanner.hidden = true;
 }
@@ -446,18 +462,20 @@ async function loadSessions() {
   }
 }
 
-async function loadSession(sessionId) {
+async function loadSession(sessionId, options = {}) {
   const payload = await apiFetch(`${API.sessions}/${sessionId}`);
   state.currentSessionId = sessionId;
   state.messages = payload.messages.map((message) => ({
     id: message.id,
     role: message.role,
     content: message.content,
+    parentId: message.parent_id,
+    interaction: message.interaction || "message",
+    route: message.route,
     createdAt: message.created_at,
-    comments: [],
   }));
   renderChat();
-  await loadSessions();
+  if (!options.silent) await loadSessions();
 }
 
 async function loadWikiPages() {
