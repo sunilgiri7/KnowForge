@@ -5,9 +5,10 @@ user login, email verification, Postgres chat persistence, and a clean dashboard
 
 ## What It Does
 
-- Upload PDFs up to 5 MB and compile them into Markdown wiki pages.
+- Upload PDFs up to the configured limit and compile them into Markdown wiki pages.
 - Ask questions that use wiki context when relevant, or Groq directly for general chat.
 - Click a wiki page to summarize that exact page with the correct context.
+- Build better wiki pages from long documents with chunk-level extraction and final synthesis.
 - Register, verify email, login, and keep user data isolated.
 - Store chat sessions and messages in Postgres.
 - Keep runtime wiki/source files under `storage/users/{user_id}/`.

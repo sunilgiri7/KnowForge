@@ -18,9 +18,12 @@ class Settings(BaseSettings):
     groq_max_completion_tokens: int = 2048
 
     knowforge_storage_path: str = "storage"
-    max_pdf_upload_bytes: int = 5 * 1024 * 1024
-    wiki_context_char_budget: int = 24_000
-    wiki_page_soft_char_limit: int = 50_000
+    max_pdf_upload_bytes: int = 100 * 1024 * 1024
+    pdf_extract_char_limit: int = 1_200_000
+    wiki_context_char_budget: int = 40_000
+    wiki_page_soft_char_limit: int = 120_000
+    wiki_compile_chunk_chars: int = 18_000
+    wiki_compile_max_chunks: int = 24
     chat_history_char_budget: int = 6_000
     chat_history_keep_last: int = 6
 

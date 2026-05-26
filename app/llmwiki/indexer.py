@@ -31,6 +31,19 @@ WIKI_INTENT_TERMS = {
     "wiki",
 }
 
+SELF_PROFILE_TERMS = {
+    "about",
+    "background",
+    "bio",
+    "experience",
+    "me",
+    "my",
+    "myself",
+    "profile",
+    "resume",
+    "skills",
+}
+
 
 @dataclass(frozen=True)
 class PageCandidate:
@@ -43,8 +56,14 @@ class WikiIndexer:
     def __init__(self, store: WikiStore):
         self.store = store
 
-    def route(self, question: str, *, allow_fallback: bool = True) -> RouteDecision:
-        candidates = self.find_candidates(question, limit=4)
+    def route(
+        self,
+        question: str,
+        *,
+        allow_fallback: bool = True,
+        candidate_queries: list[str] | None = None,
+    ) -> RouteDecision:
+        candidates = self.find_candidates(question, limit=4, candidate_queries=candidate_queries)
         difficulty = self.classify_difficulty(question, candidates)
         explicit_wiki_intent = self.has_wiki_intent(question)
         if self.needs_exact_evidence(question) and candidates and allow_fallback:
@@ -65,7 +84,7 @@ class WikiIndexer:
         top = candidates[0]
         pages_are_current = all(item.page.meta.freshness == "current" for item in candidates[:2])
         confidence_is_ok = top.page.meta.confidence in {"high", "medium"}
-        if top.score >= 0.65 and pages_are_current and confidence_is_ok:
+        if top.score >= 0.45 and pages_are_current and confidence_is_ok:
             return RouteDecision(
                 route="wiki",
                 page_slugs=[candidate.slug for candidate in candidates[:3]],
@@ -73,7 +92,7 @@ class WikiIndexer:
                 reason="Strong wiki match found.",
                 difficulty=difficulty,
             )
-        if explicit_wiki_intent and top.score >= 0.35:
+        if explicit_wiki_intent and top.score >= 0.20:
             return RouteDecision(
                 route="wiki",
                 page_slugs=[candidate.slug for candidate in candidates[:2]],
@@ -89,8 +108,17 @@ class WikiIndexer:
             difficulty=difficulty,
         )
 
-    def find_candidates(self, question: str, *, limit: int) -> list[PageCandidate]:
-        query_terms = set(tokenize(question))
+    def find_candidates(
+        self,
+        question: str,
+        *,
+        limit: int,
+        candidate_queries: list[str] | None = None,
+    ) -> list[PageCandidate]:
+        queries = [question, *(candidate_queries or [])]
+        query_terms = set()
+        for query in queries:
+            query_terms.update(tokenize(query))
         if not query_terms:
             return []
         candidates: list[PageCandidate] = []
@@ -109,8 +137,19 @@ class WikiIndexer:
             if not page_terms:
                 continue
             overlap = len(query_terms & page_terms)
-            title_bonus = 0.15 if query_terms & set(tokenize(page.meta.title)) else 0
-            score = min(1.0, overlap / max(3, len(query_terms)) + title_bonus)
+            title_terms = set(tokenize(page.meta.title))
+            summary_terms = set(tokenize(page.meta.summary))
+            tag_terms = set(tokenize(" ".join(page.meta.tags)))
+            title_bonus = 0.20 if query_terms & title_terms else 0
+            tag_bonus = 0.12 if query_terms & tag_terms else 0
+            summary_bonus = min(0.20, len(query_terms & summary_terms) * 0.04)
+            score = min(
+                1.0,
+                overlap / max(4, min(12, len(query_terms)))
+                + title_bonus
+                + tag_bonus
+                + summary_bonus,
+            )
             if score > 0:
                 candidates.append(PageCandidate(slug=item.slug, score=score, page=page))
         return sorted(candidates, key=lambda candidate: candidate.score, reverse=True)[:limit]
@@ -128,7 +167,7 @@ class WikiIndexer:
         remaining = char_budget
         for slug in slugs:
             page = self.store.read_page(slug, prefer_compact=True)
-            snippet = self._page_snippet(page, query_terms, max_chars=max(1200, remaining // 2))
+            snippet = self._page_snippet(page, query_terms, max_chars=max(2500, remaining // 2))
             block = (
                 f"[wiki:{page.meta.slug}] {page.meta.title}\n"
                 f"Summary: {page.meta.summary}\n{snippet}"
@@ -179,7 +218,30 @@ class WikiIndexer:
     def has_wiki_intent(question: str) -> bool:
         terms = set(tokenize(question))
         lowered = question.lower()
-        return bool(terms & WIKI_INTENT_TERMS) or "according to" in lowered
+        vague_doc_terms = {
+            "agreement",
+            "contract",
+            "salary",
+            "compensation",
+            "notice",
+            "termination",
+            "paper",
+            "research",
+            "abstract",
+            "method",
+            "architecture",
+            "benchmark",
+            "results",
+            "resume",
+            "experience",
+            "skills",
+        }
+        return (
+            bool(terms & (WIKI_INTENT_TERMS | vague_doc_terms | SELF_PROFILE_TERMS))
+            or "according to" in lowered
+            or "do you know about me" in lowered
+            or "know about me" in lowered
+        )
 
     @staticmethod
     def classify_difficulty(question: str, candidates: list[PageCandidate]) -> str:
@@ -214,7 +276,15 @@ class WikiIndexer:
             score = len(query_terms & set(tokenize(paragraph)))
             scored.append((index, score, paragraph))
         ranked = sorted(scored, key=lambda item: item[1], reverse=True)
-        selected = [paragraph for _, score, paragraph in ranked[:8] if score > 0]
+        selected_indices = {index for index, score, _ in ranked[:10] if score > 0}
+        expanded_indices = set(selected_indices)
+        for index in selected_indices:
+            expanded_indices.update({index - 1, index, index + 1})
+        selected = [
+            paragraph
+            for index, _, paragraph in sorted(scored, key=lambda item: item[0])
+            if index in expanded_indices and paragraph
+        ]
         if not selected:
             selected = [keyword_summary(page.content, max_sentences=6)]
         ordered = "\n\n".join(selected)

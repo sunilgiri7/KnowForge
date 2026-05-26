@@ -65,6 +65,7 @@ class ChatRequest(BaseModel):
     session_id: str | None = None
     context_page_slugs: list[str] = Field(default_factory=list, max_length=8)
     intent: Literal["auto", "wiki", "direct"] = "auto"
+    user_context: str | None = Field(default=None, max_length=1_000)
 
 
 class AgentTrace(BaseModel):

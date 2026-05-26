@@ -28,6 +28,11 @@ async def chat(
 ) -> ChatResponse:
     session = get_or_create_session(db, user, request.session_id, request.question)
     request.session_id = session.id
+    request.user_context = (
+        f"Logged-in user: {user.name}. Email: {user.email}. "
+        "When the user asks about me, my profile, my background, or my documents, "
+        "prefer relevant uploaded wiki pages for this user."
+    )
     request.messages = history_for_session(db, session)
     add_message(db, user=user, session=session, role="user", content=request.question)
     response = await ChatService(wiki_store_for_user(user)).answer(request)

@@ -12,7 +12,15 @@ const API = {
 };
 
 const AUTH_KEY = "knowforge.auth.v1";
-const MAX_UPLOAD_BYTES = 5 * 1024 * 1024;
+const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
+const THINKING_STEPS = [
+  "Understanding your question",
+  "Rewriting vague references",
+  "Checking your wiki memory",
+  "Selecting the best document context",
+  "Asking the answer agent",
+  "Verifying support and citations",
+];
 
 const state = {
   token: null,
@@ -22,6 +30,7 @@ const state = {
   pendingReplyTo: null,
   pendingCommentFor: null,
   sending: false,
+  thinkingTimers: new Map(),
 };
 
 const els = {
@@ -177,6 +186,20 @@ function showAuthError(message) {
   els.authError.hidden = false;
 }
 
+function setButtonLoading(button, loading, label) {
+  if (!button) return;
+  if (loading) {
+    button.dataset.originalText = button.textContent;
+    button.textContent = label || "Working...";
+    button.classList.add("loading");
+    button.disabled = true;
+  } else {
+    button.textContent = button.dataset.originalText || button.textContent;
+    button.classList.remove("loading");
+    button.disabled = false;
+  }
+}
+
 function setAuthMode(mode) {
   els.authError.hidden = true;
   els.loginForm.hidden = mode !== "login";
@@ -227,6 +250,23 @@ function updateMessage(id, patch) {
   renderChat();
 }
 
+function startThinking(messageId) {
+  stopThinking(messageId);
+  let index = 0;
+  updateMessage(messageId, { thinkingStep: index });
+  const timer = setInterval(() => {
+    index = Math.min(index + 1, THINKING_STEPS.length - 1);
+    updateMessage(messageId, { thinkingStep: index });
+  }, 1600);
+  state.thinkingTimers.set(messageId, timer);
+}
+
+function stopThinking(messageId) {
+  const timer = state.thinkingTimers.get(messageId);
+  if (timer) clearInterval(timer);
+  state.thinkingTimers.delete(messageId);
+}
+
 function addComment(parentId, role, content) {
   const parent = state.messages.find((message) => message.id === parentId);
   if (!parent) return;
@@ -253,10 +293,12 @@ async function sendMessage(content, options = {}) {
     parentId,
     comments: [],
     createdAt: new Date().toISOString(),
+    thinkingStep: 0,
   });
   state.sending = true;
   els.sendBtn.disabled = true;
   renderChat();
+  startThinking(assistantId);
 
   try {
     const question = parentId ? `Replying in thread:\n\n${content}` : content;
@@ -287,9 +329,27 @@ async function sendMessage(content, options = {}) {
     });
     toast(error.message, "error");
   } finally {
+    stopThinking(assistantId);
     state.sending = false;
     els.sendBtn.disabled = false;
   }
+}
+
+function renderThinking(stepIndex = 0) {
+  const safeIndex = Math.max(0, Math.min(stepIndex, THINKING_STEPS.length - 1));
+  const steps = THINKING_STEPS.map((label, index) => {
+    const stateClass = index < safeIndex ? "done" : index === safeIndex ? "active" : "";
+    return `<li class="${stateClass}"><span></span>${escapeHtml(label)}</li>`;
+  }).join("");
+  return `
+    <div class="agent-thinking">
+      <div class="thinking-title">
+        <span class="thinking-spinner"></span>
+        <strong>${escapeHtml(THINKING_STEPS[safeIndex])}</strong>
+      </div>
+      <ol>${steps}</ol>
+    </div>
+  `;
 }
 
 function renderChat() {
@@ -316,7 +376,7 @@ function renderChat() {
       minute: "2-digit",
     });
     node.querySelector(".message-body").innerHTML = message.pending
-      ? '<p class="empty-mini">Thinking through wiki context and conversation memory...</p>'
+      ? renderThinking(message.thinkingStep || 0)
       : renderMarkdown(message.content);
     node.querySelector(".copy-btn").addEventListener("click", () => {
       navigator.clipboard?.writeText(message.content);
@@ -435,7 +495,7 @@ async function uploadPdf(file) {
     return;
   }
   if (file.size > MAX_UPLOAD_BYTES) {
-    showUploadError("PDF is larger than 5 MB.");
+    showUploadError("PDF is larger than the configured upload limit.");
     return;
   }
 
@@ -476,6 +536,8 @@ function bindEvents() {
 
   els.loginForm.addEventListener("submit", async (event) => {
     event.preventDefault();
+    const button = els.loginForm.querySelector("button[type='submit']");
+    setButtonLoading(button, true, "Logging in...");
     try {
       const response = await apiFetch(API.login, {
         method: "POST",
@@ -493,11 +555,15 @@ function bindEvents() {
         els.verifyEmail.value = els.loginEmail.value;
         setAuthMode("verify");
       }
+    } finally {
+      setButtonLoading(button, false);
     }
   });
 
   els.registerForm.addEventListener("submit", async (event) => {
     event.preventDefault();
+    const button = els.registerForm.querySelector("button[type='submit']");
+    setButtonLoading(button, true, "Creating...");
     try {
       await apiFetch(API.register, {
         method: "POST",
@@ -513,11 +579,15 @@ function bindEvents() {
       toast("Verification code sent.");
     } catch (error) {
       showAuthError(error.message);
+    } finally {
+      setButtonLoading(button, false);
     }
   });
 
   els.verifyForm.addEventListener("submit", async (event) => {
     event.preventDefault();
+    const button = els.verifyForm.querySelector("button[type='submit']");
+    setButtonLoading(button, true, "Verifying...");
     try {
       await apiFetch(API.verify, {
         method: "POST",
@@ -529,10 +599,13 @@ function bindEvents() {
       toast("Email verified. Login now.");
     } catch (error) {
       showAuthError(error.message);
+    } finally {
+      setButtonLoading(button, false);
     }
   });
 
   els.resendCodeBtn.addEventListener("click", async () => {
+    setButtonLoading(els.resendCodeBtn, true, "Sending...");
     try {
       await apiFetch(API.resend, {
         method: "POST",
@@ -542,6 +615,8 @@ function bindEvents() {
       toast("New verification code sent.");
     } catch (error) {
       showAuthError(error.message);
+    } finally {
+      setButtonLoading(els.resendCodeBtn, false);
     }
   });
 

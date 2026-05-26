@@ -339,6 +339,48 @@ button {
   opacity: 0.55;
 }
 
+.primary-button.loading,
+.secondary-button.loading {
+  position: relative;
+  color: transparent;
+}
+
+.primary-button.loading::after,
+.secondary-button.loading::after {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: currentColor;
+  content: "";
+}
+
+.primary-button.loading::before,
+.secondary-button.loading::before {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 18px;
+  height: 18px;
+  margin: -9px 0 0 -9px;
+  border: 2px solid var(--accent);
+  border-right-color: transparent;
+  border-radius: 50%;
+  content: "";
+  animation: spin 0.8s linear infinite;
+}
+
+.primary-button.loading::before {
+  border-color: white;
+  border-right-color: transparent;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .secondary-button {
   padding: 9px 12px;
   border-color: var(--line);
@@ -476,6 +518,68 @@ button {
 .message-body pre code {
   padding: 0;
   background: transparent;
+}
+
+.agent-thinking {
+  display: grid;
+  gap: 12px;
+  padding: 4px 0 2px;
+}
+
+.thinking-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--accent-strong);
+}
+
+.thinking-spinner {
+  width: 18px;
+  height: 18px;
+  border: 2px solid var(--accent);
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+.agent-thinking ol {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.agent-thinking li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.agent-thinking li span {
+  width: 8px;
+  height: 8px;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: var(--surface);
+}
+
+.agent-thinking li.active {
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.agent-thinking li.active span {
+  border-color: var(--accent);
+  background: var(--accent);
+  box-shadow: 0 0 0 4px rgba(11, 122, 117, 0.12);
+}
+
+.agent-thinking li.done span {
+  border-color: var(--accent);
+  background: var(--accent-soft);
 }
 
 .message-meta-row {
