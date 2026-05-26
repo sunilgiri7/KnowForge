@@ -5,6 +5,18 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BASE_DIR = Path(__file__).resolve().parents[2]
 
+# Load a developer-provided .env file at runtime if present. This ensures credentials
+# and runtime secrets from `.env` are used. Do not fall back to `.env.example`.
+try:
+    from dotenv import load_dotenv
+
+    env_path = BASE_DIR / ".env"
+    if env_path.exists():
+        load_dotenv(env_path, override=False)
+except Exception:
+    # dotenv not installed or load failed; rely on pydantic env_file fallback
+    pass
+
 
 class Settings(BaseSettings):
     app_name: str = "KnowForge"
@@ -56,6 +68,7 @@ class Settings(BaseSettings):
         )
 
     model_config = SettingsConfigDict(
+        # Keep env_file configured but prefer the explicitly loaded .env above.
         env_file=str(BASE_DIR / ".env"),
         env_file_encoding="utf-8",
     )
