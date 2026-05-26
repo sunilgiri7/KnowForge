@@ -29,9 +29,8 @@ async def chat(
     session = get_or_create_session(db, user, request.session_id, request.question)
     request.session_id = session.id
     request.user_context = (
-        f"Logged-in user: {user.name}. Email: {user.email}. "
-        "When the user asks about me, my profile, my background, or my documents, "
-        "prefer relevant uploaded wiki pages for this user."
+        "The user is authenticated and may ask about their own profile, background, or uploaded "
+        "wiki documents. Prefer relevant user-specific wiki pages when answering personal questions."
     )
     request.messages = history_for_session(db, session)
     add_message(db, user=user, session=session, role="user", content=request.question)

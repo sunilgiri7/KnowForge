@@ -38,6 +38,26 @@ class ChatService:
             char_budget=settings.chat_history_char_budget,
             keep_last=settings.chat_history_keep_last,
         )
+        # Handle brief social replies locally (e.g., "thanks", "thank you")
+        if self._is_gratitude(request.question):
+            trace = [
+                AgentTrace(
+                    agent="smalltalk",
+                    action="gratitude_reply",
+                    confidence=1.0,
+                    notes="Handled locally",
+                )
+            ]
+            return ChatResponse(
+                session_id=request.session_id,
+                answer="You're welcome! Happy to help — let me know if you need anything else.",
+                route="direct",
+                difficulty="easy",
+                citations=[],
+                used_pages=[],
+                knowledge_gap_created=False,
+                agent_trace=trace,
+            )
         retrieval_question = request.question
         route_hint = False
         candidate_queries = [request.question]
@@ -229,6 +249,24 @@ class ChatService:
             "tell me about myself",
         )
         return any(pattern in compact for pattern in patterns)
+
+    @staticmethod
+    def _is_gratitude(question: str) -> bool:
+        if not question:
+            return False
+        q = " ".join(question.lower().split())
+        # common short gratitude phrases
+        patterns = (
+            "thank",
+            "thanks",
+            "thank you",
+            "thx",
+            "ty",
+            "appreciate",
+            "good"
+        )
+        # Only treat as gratitude when the message is short (avoids false positives)
+        return any(p in q for p in patterns) and len(q.split()) <= 6
 
     @staticmethod
     def _history_with_user_context(history: str, user_context: str | None) -> str:
