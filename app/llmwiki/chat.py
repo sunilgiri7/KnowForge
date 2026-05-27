@@ -188,7 +188,7 @@ class ChatService:
             return await self.llm.generate_text(prompt, temperature=0.35), True, None
         except Exception as exc:
             return (
-                "I could not reach the language model right now. Please try again in a moment.",
+                "We currently have insufficient tokens. Please try again shortly.",
                 False,
                 f"Groq request failed: {exc.__class__.__name__}",
             )
