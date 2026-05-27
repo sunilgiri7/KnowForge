@@ -12,6 +12,7 @@ const API = {
 };
 
 const AUTH_KEY = "knowforge.auth.v1";
+const ACTIVE_SESSION_KEY = "knowforge.session.v1";
 const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
 const THINKING_STEPS = [
   "Understanding your question",
@@ -80,6 +81,40 @@ const els = {
 
 function uid() {
   return crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
+}
+
+function getGreeting() {
+  const hour = new Date().getHours();
+  let greetings = [];
+
+  if (hour >= 5 && hour < 12) {
+    greetings = [
+      "Good morning! Ready to explore your knowledge?",
+      "Rise and shine! What can KnowForge answer for you today?",
+      "Good morning! Let's build something great today."
+    ];
+  } else if (hour >= 12 && hour < 17) {
+    greetings = [
+      "Good afternoon! How can I help you today?",
+      "Good afternoon! Ask me anything about your docs.",
+      "Hello! Hope your afternoon is productive."
+    ];
+  } else if (hour >= 17 && hour < 22) {
+    greetings = [
+      "Good evening! Wrapping up the day? How can I help?",
+      "Good evening! Need to find something in your wiki?",
+      "Good evening! Let's do some research."
+    ];
+  } else {
+    greetings = [
+      "Burning the midnight oil? KnowForge is here to assist.",
+      "Late night thoughts? What are we working on tonight?",
+      "Hello night owl! Ready for some quiet research?"
+    ];
+  }
+
+  const randomIndex = Math.floor(Math.random() * greetings.length);
+  return greetings[randomIndex];
 }
 
 function loadAuth() {
@@ -230,9 +265,16 @@ async function bootstrapAuth() {
     state.user = await apiFetch(API.me);
     showApp(true);
     await Promise.all([loadWikiPages(), loadSessions()]);
-    renderChat();
+    
+    const savedSessionId = localStorage.getItem(ACTIVE_SESSION_KEY);
+    if (savedSessionId && state.sessions.some((s) => s.id === savedSessionId)) {
+      await loadSession(savedSessionId);
+    } else {
+      renderChat();
+    }
   } catch {
     saveAuth(null);
+    localStorage.removeItem(ACTIVE_SESSION_KEY);
     showApp(false);
     setAuthMode("login");
   }
@@ -357,7 +399,7 @@ function renderChat() {
     const welcome = document.createElement("div");
     welcome.className = "welcome-card";
     welcome.innerHTML = `
-      <h3>Start a KnowForge conversation</h3>
+      <h3>${escapeHtml(getGreeting())}</h3>
       <p>Ask anything, upload a PDF, or click a wiki page for a grounded summary.</p>
     `;
     els.chatBoard.appendChild(welcome);
@@ -611,6 +653,7 @@ function confirmDeleteSession(sessionId) {
         toast("Chat deleted.");
         if (state.currentSessionId === sessionId) {
           state.currentSessionId = null;
+          localStorage.removeItem(ACTIVE_SESSION_KEY);
           state.messages = [];
           renderChat();
         }
@@ -654,6 +697,7 @@ function showDialog({ title, message, confirmText, cancelText, onConfirm }) {
 async function loadSession(sessionId, options = {}) {
   const payload = await apiFetch(`${API.sessions}/${sessionId}`);
   state.currentSessionId = sessionId;
+  localStorage.setItem(ACTIVE_SESSION_KEY, sessionId);
   state.messages = payload.messages.map((message) => ({
     id: message.id,
     role: message.role,
@@ -731,6 +775,7 @@ function logout(showToast = true) {
   saveAuth(null);
   state.user = null;
   state.currentSessionId = null;
+  localStorage.removeItem(ACTIVE_SESSION_KEY);
   state.messages = [];
   showApp(false);
   setAuthMode("login");
@@ -848,6 +893,7 @@ function bindEvents() {
   els.refreshSessionsBtn.addEventListener("click", loadSessions);
   els.newChatBtn.addEventListener("click", () => {
     state.currentSessionId = null;
+    localStorage.removeItem(ACTIVE_SESSION_KEY);
     state.messages = [];
     renderChat();
     toast("Started a new chat.");

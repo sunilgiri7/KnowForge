@@ -664,6 +664,8 @@ button {
   border-radius: var(--radius);
   background: var(--surface);
   box-shadow: var(--shadow);
+  margin: auto;
+  text-align: center;
 }
 
 .welcome-card h3 {
