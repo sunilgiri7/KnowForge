@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg viewBox="0 0 280 80" xmlns="http://www.w3.org/2000/svg" role="img">
+  <title>KnowForge</title>
+  <desc>KnowForge horizontal logo — KFO monogram mark with Know (white) Forge (amber) wordmark on dark navy</desc>
+
+  <!-- Logo card background -->
+  <rect width="280" height="80" rx="16" fill="#0A1628"/>
+
+  <!-- KFO Icon mark (60×60, offset top-left with slight elevation bg) -->
+  <g transform="translate(12,10) scale(0.6)">
+    <rect width="100" height="100" rx="20" fill="#162538"/>
+    <rect x="1.5" y="1.5" width="97" height="97" rx="18.5" fill="none" stroke="#FFFFFF" stroke-opacity="0.12" stroke-width="2"/>
+    <!-- K: amber fork arms (drawn behind white bar) -->
+    <line x1="18" y1="50" x2="34" y2="22" stroke="#F97316" stroke-width="7" stroke-linecap="round"/>
+    <line x1="18" y1="50" x2="34" y2="78" stroke="#F97316" stroke-width="7" stroke-linecap="round"/>
+    <!-- K: white vertical bar -->
+    <rect x="12" y="22" width="7" height="56" rx="2" fill="#FFFFFF"/>
+    <!-- F: vertical bar -->
+    <rect x="40" y="22" width="7" height="56" rx="2" fill="#FFFFFF"/>
+    <!-- F: top horizontal -->
+    <rect x="46" y="22" width="13" height="7" rx="2" fill="#FFFFFF"/>
+    <!-- F: middle horizontal -->
+    <rect x="46" y="44" width="10" height="7" rx="2" fill="#FFFFFF"/>
+    <!-- O: ring -->
+    <circle cx="77" cy="50" r="11" fill="none" stroke="#FFFFFF" stroke-width="6.5"/>
+  </g>
+
+  <!-- Separator -->
+  <line x1="84" y1="20" x2="84" y2="60" stroke="#FFFFFF" stroke-opacity="0.1" stroke-width="1"/>
+
+  <!-- Wordmark: Know (white) + Forge (amber) -->
+  <text
+    x="97" y="40"
+    font-family="system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif"
+    font-size="28"
+    dominant-baseline="central"
+  >
+    <tspan font-weight="700" fill="#FFFFFF">Know</tspan><tspan font-weight="700" fill="#F97316">Forge</tspan>
+  </text>
+
+</svg>

@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" role="img">
+  <title>KnowForge</title>
+  <desc>KFO monogram favicon for KnowForge — dark navy background with amber forge-spark K and white F and O lettermark</desc>
+
+  <!-- Background rounded square -->
+  <rect width="100" height="100" rx="18" fill="#0A1628"/>
+
+  <!-- Subtle inner border -->
+  <rect x="1.5" y="1.5" width="97" height="97" rx="16.5" fill="none" stroke="#FFFFFF" stroke-opacity="0.07" stroke-width="1.5"/>
+
+  <!-- K: amber fork arms (drawn behind white bar) -->
+  <line x1="18" y1="50" x2="34" y2="22" stroke="#F97316" stroke-width="7" stroke-linecap="round"/>
+  <line x1="18" y1="50" x2="34" y2="78" stroke="#F97316" stroke-width="7" stroke-linecap="round"/>
+
+  <!-- K: white vertical bar (on top of amber junction for clean merge) -->
+  <rect x="12" y="22" width="7" height="56" rx="2" fill="#FFFFFF"/>
+
+  <!-- F: vertical bar -->
+  <rect x="40" y="22" width="7" height="56" rx="2" fill="#FFFFFF"/>
+
+  <!-- F: top horizontal bar -->
+  <rect x="46" y="22" width="13" height="7" rx="2" fill="#FFFFFF"/>
+
+  <!-- F: middle horizontal bar -->
+  <rect x="46" y="44" width="10" height="7" rx="2" fill="#FFFFFF"/>
+
+  <!-- O: ring -->
+  <circle cx="77" cy="50" r="11" fill="none" stroke="#FFFFFF" stroke-width="6.5"/>
+</svg>
