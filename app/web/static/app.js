@@ -896,6 +896,7 @@ function bindEvents() {
     localStorage.removeItem(ACTIVE_SESSION_KEY);
     state.messages = [];
     renderChat();
+    renderSessionList();
     toast("Started a new chat.");
   });
   els.compactWikiBtn.addEventListener("click", async () => {
