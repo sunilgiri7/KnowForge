@@ -173,6 +173,27 @@ def compact_session_if_needed(db: Session, session: ChatSession) -> None:
     session.summary = "\n".join(f"{record.role}: {record.content[:500]}" for record in recent)
 
 
+def delete_session(db: Session, user: User, session_id: str) -> None:
+    session = db.scalar(
+        select(ChatSession).where(ChatSession.id == session_id, ChatSession.user_id == user.id)
+    )
+    if not session:
+        raise KnowForgeError("Chat session not found.", status_code=404, code="session_not_found")
+    db.delete(session)
+    db.commit()
+
+
+def rename_session_title(db: Session, user: User, session_id: str, title: str) -> ChatSession:
+    session = db.scalar(
+        select(ChatSession).where(ChatSession.id == session_id, ChatSession.user_id == user.id)
+    )
+    if not session:
+        raise KnowForgeError("Chat session not found.", status_code=404, code="session_not_found")
+    session.title = title.strip()[:180] or session.title
+    db.commit()
+    return session
+
+
 def session_item(session: ChatSession) -> ChatSessionItem:
     return ChatSessionItem(
         id=session.id,

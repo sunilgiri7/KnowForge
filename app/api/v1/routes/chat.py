@@ -13,14 +13,18 @@ from app.schemas.llmwiki import (
     ChatResponse,
     ChatSessionItem,
     ChatSessionMessages,
+    ChatSessionUpdate,
 )
 from app.services.chat_sessions import (
     add_message,
     compact_session_if_needed,
+    delete_session,
     get_or_create_session,
     get_session_messages,
     history_for_session,
     list_user_sessions,
+    rename_session_title,
+    session_item,
     thread_context_for_parent,
 )
 
@@ -82,3 +86,24 @@ async def session_messages(
     db: Annotated[Session, Depends(get_db)],
 ) -> ChatSessionMessages:
     return get_session_messages(db, user, session_id)
+
+
+@router.patch("/sessions/{session_id}", response_model=ChatSessionItem)
+async def update_session(
+    session_id: str,
+    request: ChatSessionUpdate,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> ChatSessionItem:
+    session = rename_session_title(db, user, session_id, request.title)
+    return session_item(session)
+
+
+@router.delete("/sessions/{session_id}", response_model=dict[str, bool])
+async def delete_session_route(
+    session_id: str,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> dict[str, bool]:
+    delete_session(db, user, session_id)
+    return {"deleted": True}

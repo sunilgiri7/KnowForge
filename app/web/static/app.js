@@ -27,6 +27,10 @@ const state = {
   user: null,
   currentSessionId: null,
   messages: [],
+  sessions: [],
+  openSessionMenuId: null,
+  editingSessionId: null,
+  editingSessionTitle: "",
   pendingReplyTo: null,
   pendingCommentFor: null,
   pendingMode: "message",
@@ -446,20 +450,205 @@ function clearReplyMode() {
 
 async function loadSessions() {
   const sessions = await apiFetch(API.sessions);
+  state.sessions = sessions;
+  state.openSessionMenuId = null;
+  state.editingSessionId = null;
+  state.editingSessionTitle = "";
+  renderSessionList();
+}
+
+function renderSessionList() {
   els.sessionList.innerHTML = "";
-  els.emptySessions.hidden = sessions.length > 0;
-  for (const session of sessions) {
-    const item = document.createElement("button");
-    item.type = "button";
-    item.className = "wiki-item";
-    if (session.id === state.currentSessionId) item.classList.add("active");
-    item.innerHTML = `
-      <strong>${escapeHtml(session.title)}</strong>
-      <span>${escapeHtml(session.summary || new Date(session.updated_at).toLocaleString())}</span>
-    `;
-    item.addEventListener("click", () => loadSession(session.id));
+  els.emptySessions.hidden = state.sessions.length > 0;
+  for (const session of state.sessions) {
+    const item = document.createElement("div");
+    item.className = `session-item ${session.id === state.currentSessionId ? "active" : ""}`;
+
+    const isEditing = state.editingSessionId === session.id;
+    const titleHtml = isEditing
+      ? `<input class="session-title-input" value="${escapeHtml(state.editingSessionTitle)}" />`
+      : `<strong class="session-title">${escapeHtml(session.title)}</strong>`;
+
+    if (isEditing) {
+      item.innerHTML = `
+        <div class="wiki-item session-row editing">
+          <div class="session-details">
+            ${titleHtml}
+            <span>${escapeHtml(session.summary || new Date(session.updated_at).toLocaleString())}</span>
+            <div class="edit-controls">
+              <button type="button" class="icon-button session-action confirm" title="Save title">✓</button>
+              <button type="button" class="icon-button session-action cancel" title="Cancel">✕</button>
+            </div>
+          </div>
+          <div class="session-actions"></div>
+        </div>
+        <div class="session-menu ${state.openSessionMenuId === session.id ? "visible" : ""}">
+          <button type="button" class="session-action edit">Rename</button>
+          <button type="button" class="session-action delete">Delete</button>
+        </div>
+      `;
+    } else {
+      item.innerHTML = `
+        <div class="wiki-item session-row">
+          <div class="session-details">
+            ${titleHtml}
+            <span>${escapeHtml(session.summary || new Date(session.updated_at).toLocaleString())}</span>
+          </div>
+          <div class="session-actions">
+            <button type="button" class="icon-button session-menu-btn" title="Session actions">⋮</button>
+          </div>
+        </div>
+        <div class="session-menu ${state.openSessionMenuId === session.id ? "visible" : ""}">
+          <button type="button" class="session-action edit">Rename</button>
+          <button type="button" class="session-action delete">Delete</button>
+        </div>
+      `;
+    }
+
+    const row = item.querySelector(".session-row");
+    if (row && !isEditing) {
+      row.addEventListener("click", (e) => {
+        e.stopPropagation();
+        loadSession(session.id);
+      });
+    }
+
+    if (isEditing) {
+      const input = item.querySelector(".session-title-input");
+      input.addEventListener("input", (event) => {
+        state.editingSessionTitle = event.target.value;
+      });
+      input.addEventListener("keydown", (event) => {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          applySessionRename(session.id);
+        }
+        if (event.key === "Escape") {
+          cancelSessionRename();
+        }
+      });
+      item.querySelector(".session-action.confirm").addEventListener("click", () => applySessionRename(session.id));
+      item.querySelector(".session-action.cancel").addEventListener("click", () => cancelSessionRename());
+      setTimeout(() => {
+        input?.focus();
+        try { input?.select(); } catch (e) {}
+      }, 0);
+    } else {
+      item.querySelector(".session-menu-btn").addEventListener("click", (event) => {
+        console.log("session menu button clicked", session.id);
+        event.stopPropagation();
+        toggleSessionMenu(session.id);
+      });
+      item.querySelector(".session-action.edit").addEventListener("click", (event) => {
+        event.stopPropagation();
+        startSessionRename(session.id, session.title);
+      });
+      item.querySelector(".session-action.delete").addEventListener("click", (event) => {
+        event.stopPropagation();
+        confirmDeleteSession(session.id);
+      });
+    }
+
     els.sessionList.appendChild(item);
   }
+}
+
+function toggleSessionMenu(sessionId) {
+  console.log("toggleSessionMenu before", sessionId, state.openSessionMenuId);
+  state.openSessionMenuId = state.openSessionMenuId === sessionId ? null : sessionId;
+  console.log("toggleSessionMenu after", state.openSessionMenuId);
+  renderSessionList();
+}
+
+function startSessionRename(sessionId, currentTitle) {
+  state.editingSessionId = sessionId;
+  state.editingSessionTitle = currentTitle;
+  state.openSessionMenuId = null;
+  renderSessionList();
+}
+
+function cancelSessionRename() {
+  state.editingSessionId = null;
+  state.editingSessionTitle = "";
+  renderSessionList();
+}
+
+async function applySessionRename(sessionId) {
+  const title = state.editingSessionTitle.trim();
+  if (!title) {
+    toast("Chat title cannot be empty.", "error");
+    return;
+  }
+
+  try {
+    await apiFetch(`${API.sessions}/${sessionId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title }),
+    });
+    toast("Chat renamed.");
+    state.editingSessionId = null;
+    state.editingSessionTitle = "";
+    await loadSessions();
+  } catch (error) {
+    toast(error.message, "error");
+  }
+}
+
+function confirmDeleteSession(sessionId) {
+  // close any open session menu before showing confirmation
+  state.openSessionMenuId = null;
+  renderSessionList();
+
+  showDialog({
+    title: "Delete chat?",
+    message: "This will remove the selected chat session permanently.",
+    confirmText: "Delete",
+    cancelText: "Cancel",
+    onConfirm: async () => {
+      try {
+        await apiFetch(`${API.sessions}/${sessionId}`, { method: "DELETE" });
+        toast("Chat deleted.");
+        if (state.currentSessionId === sessionId) {
+          state.currentSessionId = null;
+          state.messages = [];
+          renderChat();
+        }
+        state.openSessionMenuId = null;
+        await loadSessions();
+      } catch (error) {
+        toast(error.message, "error");
+      }
+    },
+  });
+}
+
+function showDialog({ title, message, confirmText, cancelText, onConfirm }) {
+  const overlay = document.createElement("div");
+  overlay.className = "dialog-overlay";
+  overlay.innerHTML = `
+    <div class="dialog-card">
+      <strong>${escapeHtml(title)}</strong>
+      <p>${escapeHtml(message)}</p>
+      <div class="dialog-actions">
+        <button type="button" class="secondary-button dialog-cancel">${escapeHtml(cancelText)}</button>
+        <button type="button" class="primary-button dialog-confirm">${escapeHtml(confirmText)}</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+
+  const remove = () => overlay.remove();
+  overlay.querySelector(".dialog-cancel").addEventListener("click", () => {
+    remove();
+  });
+  overlay.querySelector(".dialog-confirm").addEventListener("click", async () => {
+    remove();
+    await onConfirm();
+  });
+  overlay.addEventListener("click", (event) => {
+    if (event.target === overlay) remove();
+  });
 }
 
 async function loadSession(sessionId, options = {}) {
@@ -687,6 +876,12 @@ function bindEvents() {
     });
   }
   els.dropZone.addEventListener("drop", (event) => uploadPdf(event.dataTransfer.files?.[0]));
+  window.addEventListener("click", () => {
+    if (state.openSessionMenuId) {
+      state.openSessionMenuId = null;
+      renderSessionList();
+    }
+  });
 }
 
 function resizeTextarea() {

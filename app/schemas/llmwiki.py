@@ -158,6 +158,10 @@ class ChatSessionItem(BaseModel):
     updated_at: datetime
 
 
+class ChatSessionUpdate(BaseModel):
+    title: str = Field(min_length=1, max_length=180)
+
+
 class StoredChatMessage(BaseModel):
     id: str
     role: Literal["user", "assistant", "system"]
