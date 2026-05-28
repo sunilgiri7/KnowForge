@@ -35,6 +35,7 @@ class ChatService:
 
     FALLBACK_MATCH_MIN_OVERLAP = 4
     FALLBACK_MATCH_MIN_RATIO = 0.14
+    DIRECT_COMPLETION_CAP = 700
 
     async def answer(self, request: ChatRequest) -> ChatResponse:
         history = await self.history_compactor.compact(
@@ -176,9 +177,9 @@ class ChatService:
         # This is safe for Groq paid tier; free-tier users will be rate limited per-minute.
         safe_context = trim_context_to_token_budget(
             context,
-            token_budget=8000,
-            reserve_for_prompt=600,
-            reserve_for_output=0,
+            token_budget=settings.chat_prompt_token_budget,
+            reserve_for_prompt=700,
+            reserve_for_output=min(settings.chat_max_completion_tokens, settings.groq_max_completion_tokens),
         )
         prompt = safe_format(
             ANSWER_PROMPT,
@@ -188,7 +189,14 @@ class ChatService:
         )
         if self.llm.available:
             try:
-                return await self.llm.generate_text(prompt, temperature=0.2), False
+                return (
+                    await self.llm.generate_text(
+                        prompt,
+                        temperature=0.2,
+                        max_completion_tokens=min(settings.chat_max_completion_tokens, settings.groq_max_completion_tokens),
+                    ),
+                    False,
+                )
             except Exception:
                 pass
         return self._local_answer(question, context, route_confidence=route_confidence), True
@@ -225,7 +233,11 @@ class ChatService:
                 "Groq API key is missing.",
             )
         try:
-            text = await self.llm.generate_text(prompt, temperature=0.35)
+            text = await self.llm.generate_text(
+                prompt,
+                temperature=0.35,
+                max_completion_tokens=min(self.DIRECT_COMPLETION_CAP, settings.groq_max_completion_tokens),
+            )
             return self._clean_answer_text(text), True, None
         except Exception as exc:
             return (

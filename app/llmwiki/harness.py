@@ -39,6 +39,15 @@ class AIHarness:
         self.indexer = indexer
         self.llm = llm
 
+    @staticmethod
+    def _context_char_budget_for_route(request: ChatRequest, decision: RouteDecision) -> int:
+        # Keep route-specific budgets conservative for free-tier model context windows.
+        if request.context_page_slugs or request.intent == "wiki":
+            return min(settings.wiki_context_char_budget, 16_000)
+        if decision.route == "fallback":
+            return min(settings.wiki_context_char_budget, 7_000)
+        return min(settings.chat_context_char_budget, settings.wiki_context_char_budget)
+
     async def plan(self, request: ChatRequest, history: str) -> HarnessPlan:
         traces = [
             AgentTrace(
@@ -165,23 +174,24 @@ class AIHarness:
             )
 
         traces.append(self._trace_decision(decision))
+        context_budget = self._context_char_budget_for_route(request, decision)
         if decision.route == "wiki" or request.intent == "wiki":
             if memory_hint or request.intent == "wiki":
                 context, used_pages = self.indexer.build_exact_page_context(
                     decision.page_slugs,
-                    char_budget=settings.wiki_context_char_budget,
+                    char_budget=context_budget,
                 )
             else:
                 context, used_pages = self.indexer.build_context(
                     decision.page_slugs,
                     retrieval_question,
-                    char_budget=settings.wiki_context_char_budget,
+                    char_budget=context_budget,
                 )
         elif decision.route == "fallback":
             context, used_pages = self.indexer.build_context(
                 decision.page_slugs,
                 retrieval_question,
-                char_budget=settings.wiki_context_char_budget,
+                char_budget=context_budget,
             )
         else:
             context, used_pages = "", []

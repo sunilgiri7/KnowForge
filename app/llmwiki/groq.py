@@ -26,11 +26,17 @@ class GroqClient:
     def available(self) -> bool:
         return bool(self.api_key and self.api_key.strip())
 
-    async def generate_text(self, prompt: str, *, temperature: float = 0.2) -> str:
+    async def generate_text(
+        self,
+        prompt: str,
+        *,
+        temperature: float = 0.2,
+        max_completion_tokens: int | None = None,
+    ) -> str:
         if not self.api_key:
             raise RuntimeError("GROQ_API_KEY is not configured.")
         return await asyncio.wait_for(
-            asyncio.to_thread(self._generate_text_sync, prompt, temperature),
+            asyncio.to_thread(self._generate_text_sync, prompt, temperature, max_completion_tokens),
             timeout=self.timeout_seconds,
         )
 
@@ -38,7 +44,12 @@ class GroqClient:
         text = await self.generate_text(prompt, temperature=temperature)
         return self._parse_json(text)
 
-    def _generate_text_sync(self, prompt: str, temperature: float) -> str:
+    def _generate_text_sync(
+        self,
+        prompt: str,
+        temperature: float,
+        max_completion_tokens: int | None = None,
+    ) -> str:
         from groq import Groq
 
         client = Groq(api_key=self.api_key)
@@ -46,7 +57,7 @@ class GroqClient:
             model=self.model,
             messages=[{"role": "user", "content": prompt}],
             temperature=temperature,
-            max_completion_tokens=self.max_completion_tokens,
+            max_completion_tokens=max_completion_tokens or self.max_completion_tokens,
             top_p=1,
             stream=True,
             stop=None,

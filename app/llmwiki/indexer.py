@@ -84,7 +84,9 @@ class WikiIndexer:
         top = candidates[0]
         pages_are_current = all(item.page.meta.freshness == "current" for item in candidates[:2])
         confidence_is_ok = top.page.meta.confidence in {"high", "medium"}
-        if top.score >= 0.45 and pages_are_current and confidence_is_ok:
+        very_strong_match = top.score >= 0.72
+        strong_with_wiki_intent = explicit_wiki_intent and top.score >= 0.45
+        if (very_strong_match or strong_with_wiki_intent) and pages_are_current and confidence_is_ok:
             return RouteDecision(
                 route="wiki",
                 page_slugs=[candidate.slug for candidate in candidates[:3]],
@@ -92,7 +94,7 @@ class WikiIndexer:
                 reason="Strong wiki match found.",
                 difficulty=difficulty,
             )
-        if explicit_wiki_intent and top.score >= 0.20:
+        if explicit_wiki_intent and top.score >= 0.28:
             return RouteDecision(
                 route="wiki",
                 page_slugs=[candidate.slug for candidate in candidates[:2]],
@@ -167,7 +169,7 @@ class WikiIndexer:
         remaining = char_budget
         for slug in slugs:
             page = self.store.read_page(slug, prefer_compact=True)
-            snippet = self._page_snippet(page, query_terms, max_chars=max(6000, remaining // 2))
+            snippet = self._page_snippet(page, query_terms, max_chars=max(2400, remaining // 3))
             block = (
                 f"[wiki:{page.meta.slug}] {page.meta.title}\n"
                 f"Summary: {page.meta.summary}\n{snippet}"

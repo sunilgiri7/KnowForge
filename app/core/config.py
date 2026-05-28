@@ -35,6 +35,9 @@ class Settings(BaseSettings):
     max_pdf_upload_bytes: int = 100 * 1024 * 1024
     pdf_extract_char_limit: int = 1_200_000
     wiki_context_char_budget: int = 40_000
+    chat_context_char_budget: int = 12_000
+    chat_prompt_token_budget: int = 5_500
+    chat_max_completion_tokens: int = 900
     wiki_page_soft_char_limit: int = 120_000
     wiki_compile_chunk_chars: int = 24_000
     wiki_compile_max_chunks: int = 24
