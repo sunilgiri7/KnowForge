@@ -453,7 +453,7 @@ body.modal-open {
 }
 
 .session-panel {
-  display: flex;
+  /* display: grid; */
   flex-direction: column;
   min-height: 200px;
   flex: 1 1 auto;
