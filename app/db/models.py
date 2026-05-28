@@ -27,6 +27,7 @@ class User(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, onupdate=utc_now
     )
+    llm_active_provider: Mapped[str] = mapped_column(String(40), default="openrouter", nullable=False)
 
     sessions: Mapped[list[ChatSession]] = relationship(
         back_populates="user", cascade="all, delete-orphan"

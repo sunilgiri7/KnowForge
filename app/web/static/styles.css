@@ -311,6 +311,49 @@ button {
   gap: 10px;
 }
 
+.select-with-logo {
+  position: relative;
+  width: 100%;
+}
+
+.provider-logo {
+  position: absolute;
+  left: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 18px;
+  height: 18px;
+  pointer-events: none;
+  opacity: 0.92;
+  z-index: 2;
+}
+
+.select-with-logo-input {
+  padding-left: 38px !important;
+  width: 100%;
+}
+
+#llmStatusPill.connected {
+  background: rgba(26, 127, 55, 0.12);
+  color: #1a7f37;
+}
+
+#llmStatusPill.disconnected {
+  background: var(--surface-2);
+  color: var(--muted);
+}
+
+#llmStatusPill.connected::before,
+#llmStatusPill.disconnected::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: currentColor;
+  margin-right: 6px;
+  display: inline-block;
+}
+
 .llm-label {
   display: grid;
   gap: 6px;

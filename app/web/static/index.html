@@ -176,9 +176,15 @@
         <div class="llm-settings">
           <label class="llm-label">
             Provider
-            <select id="llmProviderSelect">
-              <option value="openrouter">OpenRouter</option>
-            </select>
+            <div class="select-with-logo">
+              <img id="llmProviderLogo" class="provider-logo" alt="" />
+              <select id="llmProviderSelect" class="select-with-logo-input">
+                <option value="openrouter">OpenRouter</option>
+                <option value="openai">OpenAI (ChatGPT)</option>
+                <option value="anthropic">Anthropic (Claude)</option>
+                <option value="gemini">Google (Gemini)</option>
+              </select>
+            </div>
           </label>
           <label class="llm-label">
             API Key
@@ -187,14 +193,12 @@
           <label class="llm-label">
             Model
             <select id="llmModelSelect">
-              <option value="openai/gpt-4o-mini">openai/gpt-4o-mini</option>
-              <option value="openai/gpt-4o">openai/gpt-4o</option>
-              <option value="anthropic/claude-3.5-sonnet">anthropic/claude-3.5-sonnet</option>
-              <option value="google/gemini-1.5-pro">google/gemini-1.5-pro</option>
-              <option value="deepseek/deepseek-chat">deepseek/deepseek-chat</option>
-              <option value="qwen/qwen-2.5-72b-instruct">qwen/qwen-2.5-72b-instruct</option>
-              <option value="moonshotai/kimi-k2">moonshotai/kimi-k2</option>
+              <option value="">Loading models…</option>
             </select>
+          </label>
+          <label id="llmCustomModelRow" class="llm-label" hidden>
+            Custom model ID
+            <input id="llmCustomModelInput" type="text" placeholder="e.g. gpt-5.5-2026-04-23" />
           </label>
           <div class="llm-actions">
             <button id="llmConnectBtn" class="secondary-button" type="button">Connect</button>

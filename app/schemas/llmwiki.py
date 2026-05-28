@@ -47,7 +47,7 @@ class WikiPageRename(BaseModel):
     title: str = Field(min_length=1, max_length=240)
 
 
-LlmProvider = Literal["openrouter"]
+LlmProvider = Literal["openrouter", "openai", "anthropic", "gemini"]
 
 
 class LlmKeyUpsertRequest(BaseModel):
@@ -60,6 +60,7 @@ class LlmKeyStatus(BaseModel):
     provider: LlmProvider
     connected: bool
     model: str = ""
+    active: bool = False
 
 
 class WikiPageListItem(BaseModel):

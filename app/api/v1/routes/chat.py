@@ -29,6 +29,7 @@ from app.services.chat_sessions import (
 )
 from app.services.llm_keys import get_user_llm_key_plaintext, get_user_llm_key
 from app.llm.providers.openrouter_llm import OpenRouterLlm
+from app.llm.providers.direct_llms import AnthropicLlm, GeminiLlm, OpenAILlm
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
@@ -57,11 +58,19 @@ async def chat(
         interaction=request.interaction,
     )
     user_llm = None
-    record = get_user_llm_key(db, user=user, provider="openrouter")
+    provider = (user.llm_active_provider or "openrouter").strip()
+    record = get_user_llm_key(db, user=user, provider=provider)
     if record:
-        key = get_user_llm_key_plaintext(db, user=user, provider="openrouter")
+        key = get_user_llm_key_plaintext(db, user=user, provider=provider)
         if key:
-            user_llm = OpenRouterLlm(api_key=key, model=(record.model or None))
+            if provider == "openrouter":
+                user_llm = OpenRouterLlm(api_key=key, model=(record.model or None))
+            elif provider == "openai":
+                user_llm = OpenAILlm(api_key=key, model=(record.model or "gpt-4o-mini"))
+            elif provider == "anthropic":
+                user_llm = AnthropicLlm(api_key=key, model=(record.model or "claude-3-5-sonnet-latest"))
+            elif provider == "gemini":
+                user_llm = GeminiLlm(api_key=key, model=(record.model or "gemini-2.0-flash"))
     response = await ChatService(wiki_store_for_user(user), llm=user_llm).answer(request)
     add_message(
         db,

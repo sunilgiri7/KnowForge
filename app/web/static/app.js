@@ -48,6 +48,7 @@ const state = {
   sidebarCollapsed: false,
   sidebarWidth: SIDEBAR_DEFAULT_WIDTH,
   sidebarResizing: false,
+  llmProviderTouched: false,
 };
 
 const els = {
@@ -98,6 +99,7 @@ const els = {
   llmModal: document.querySelector("#llmModal"),
   llmModalCloseBtn: document.querySelector("#llmModalCloseBtn"),
   llmProviderSelect: document.querySelector("#llmProviderSelect"),
+  llmProviderLogo: document.querySelector("#llmProviderLogo"),
   llmApiKeyInput: document.querySelector("#llmApiKeyInput"),
   llmConnectBtn: document.querySelector("#llmConnectBtn"),
   llmDisconnectBtn: document.querySelector("#llmDisconnectBtn"),
@@ -105,12 +107,134 @@ const els = {
   llmStatusPill: document.querySelector("#llmStatusPill"),
   llmError: document.querySelector("#llmError"),
   llmModelSelect: document.querySelector("#llmModelSelect"),
+  llmCustomModelRow: document.querySelector("#llmCustomModelRow"),
+  llmCustomModelInput: document.querySelector("#llmCustomModelInput"),
 };
+
+const PROVIDER_LOGOS = {
+  openrouter: "https://cdn.simpleicons.org/openrouter/94A3B8",
+  // Use jsDelivr SVG to avoid occasional simpleicons rendering issues.
+  openai: "https://cdn.jsdelivr.net/npm/simple-icons@latest/icons/openai.svg",
+  anthropic: "https://cdn.simpleicons.org/anthropic",
+  gemini: "https://cdn.simpleicons.org/googlegemini",
+};
+
+const PROVIDER_KEY_PLACEHOLDERS = {
+  openrouter: "Paste your OpenRouter key",
+  openai: "Paste your OpenAI API key",
+  anthropic: "Paste your Anthropic API key",
+  gemini: "Paste your Gemini API key",
+};
+
+const PROVIDER_MODELS = {
+  openrouter: [
+    { id: "openai/gpt-4o-mini", label: "GPT-4o mini (OpenRouter)" },
+    { id: "openai/gpt-4o", label: "GPT-4o (OpenRouter)" },
+    { id: "anthropic/claude-3.5-sonnet", label: "Claude 3.5 Sonnet (OpenRouter)" },
+    { id: "google/gemini-1.5-pro", label: "Gemini 1.5 Pro (OpenRouter)" },
+    { id: "deepseek/deepseek-chat", label: "DeepSeek Chat (OpenRouter)" },
+    { id: "qwen/qwen-2.5-72b-instruct", label: "Qwen 2.5 72B Instruct (OpenRouter)" },
+    { id: "moonshotai/kimi-k2", label: "Kimi (OpenRouter)" },
+    { id: "__custom__", label: "Custom model ID…" },
+  ],
+  openai: [
+    { group: "Aliases", id: "gpt-5.5", label: "GPT-5.5" },
+    { group: "Aliases", id: "gpt-5.4", label: "GPT-5.4" },
+    { group: "Aliases", id: "gpt-5.2", label: "GPT-5.2" },
+    { group: "Aliases", id: "gpt-5", label: "GPT-5" },
+    { group: "Aliases", id: "gpt-5.4-mini", label: "GPT-5.4 mini" },
+    { group: "Pinned snapshots", id: "gpt-5.5-2026-04-23", label: "GPT-5.5 (2026-04-23)" },
+    { group: "Pinned snapshots", id: "gpt-5.4-2026-03-05", label: "GPT-5.4 (2026-03-05)" },
+    { group: "Pinned snapshots", id: "gpt-5.2-2025-12-11", label: "GPT-5.2 (2025-12-11)" },
+    { group: "Pinned snapshots", id: "gpt-5-2025-08-07", label: "GPT-5 (2025-08-07)" },
+    { group: "Pinned snapshots", id: "gpt-5.4-mini-2026-03-17", label: "GPT-5.4 mini (2026-03-17)" },
+    { group: "Other", id: "__custom__", label: "Custom model ID…" },
+  ],
+  anthropic: [
+    { group: "Current", id: "claude-opus-4-7", label: "Claude Opus 4.7" },
+    { group: "Current", id: "claude-sonnet-4-6", label: "Claude Sonnet 4.6" },
+    { group: "Current", id: "claude-opus-4-6", label: "Claude Opus 4.6" },
+    { group: "Aliases", id: "claude-opus-4-5", label: "Claude Opus 4.5" },
+    { group: "Aliases", id: "claude-haiku-4-5", label: "Claude Haiku 4.5" },
+    { group: "Pinned snapshots", id: "claude-opus-4-5-20251101", label: "Claude Opus 4.5 (2025-11-01)" },
+    { group: "Pinned snapshots", id: "claude-haiku-4-5-20251001", label: "Claude Haiku 4.5 (2025-10-01)" },
+    { group: "Other", id: "__custom__", label: "Custom model ID…" },
+  ],
+  gemini: [
+    { id: "gemini-3.5-flash", label: "Gemini 3.5 Flash" },
+    { id: "gemini-3.1-pro-preview", label: "Gemini 3.1 Pro Preview" },
+    { id: "gemini-3-flash-preview", label: "Gemini 3 Flash Preview" },
+    { id: "gemini-2.5-pro", label: "Gemini 2.5 Pro" },
+    { id: "gemini-3.1-flash-lite", label: "Gemini 3.1 Flash-Lite" },
+    { id: "__custom__", label: "Custom model ID…" },
+  ],
+};
+
+function updateProviderLogo() {
+  const provider = els.llmProviderSelect.value;
+  const src = PROVIDER_LOGOS[provider] || "";
+  if (els.llmProviderLogo) {
+    els.llmProviderLogo.src = src;
+    els.llmProviderLogo.alt = `${provider} logo`;
+  }
+}
+
+function updateApiKeyPlaceholder() {
+  const provider = els.llmProviderSelect.value;
+  const placeholder = PROVIDER_KEY_PLACEHOLDERS[provider] || "Paste your API key";
+  if (els.llmApiKeyInput) els.llmApiKeyInput.placeholder = placeholder;
+}
+
+function updateModelOptions({ provider, selectedModel }) {
+  const models = PROVIDER_MODELS[provider] || [];
+  els.llmModelSelect.innerHTML = "";
+  const hasGroups = models.some((m) => m.group);
+  if (hasGroups) {
+    const groups = new Map();
+    for (const item of models) {
+      const group = item.group || "Models";
+      if (!groups.has(group)) groups.set(group, []);
+      groups.get(group).push(item);
+    }
+    for (const [group, items] of groups.entries()) {
+      const optgroup = document.createElement("optgroup");
+      optgroup.label = group;
+      for (const item of items) {
+        const opt = document.createElement("option");
+        opt.value = item.id;
+        opt.textContent = item.label;
+        optgroup.appendChild(opt);
+      }
+      els.llmModelSelect.appendChild(optgroup);
+    }
+  } else {
+    for (const item of models) {
+      const opt = document.createElement("option");
+      opt.value = item.id;
+      opt.textContent = item.label;
+      els.llmModelSelect.appendChild(opt);
+    }
+  }
+  if (selectedModel) {
+    const exists = Array.from(els.llmModelSelect.options).some((o) => o.value === selectedModel);
+    if (exists) els.llmModelSelect.value = selectedModel;
+    else {
+      els.llmModelSelect.value = "__custom__";
+      els.llmCustomModelRow.hidden = false;
+      els.llmCustomModelInput.value = selectedModel;
+    }
+  } else {
+    els.llmModelSelect.selectedIndex = 0;
+  }
+  const custom = els.llmModelSelect.value === "__custom__";
+  els.llmCustomModelRow.hidden = !custom;
+}
 
 function openLlmModal() {
   els.llmModal.hidden = false;
   document.body.classList.add("modal-open");
-  loadLlmStatus();
+  state.llmProviderTouched = false;
+  loadLlmStatus({ preferActiveProvider: true });
 }
 
 function closeLlmModal() {
@@ -128,20 +252,29 @@ function setLlmUi({ connected, provider }) {
   els.llmSaveModelBtn.disabled = !connected;
   els.llmStatusPill.textContent = connected ? `Connected (${provider})` : "Not connected";
   els.llmStatusPill.classList.toggle("muted", !connected);
+  els.llmStatusPill.classList.toggle("connected", !!connected);
+  els.llmStatusPill.classList.toggle("disconnected", !connected);
   els.llmSettingsBtn?.classList.toggle("llm-connected", !!connected);
   els.llmSettingsBtn?.classList.toggle("llm-disconnected", !connected);
+  updateProviderLogo();
+  updateApiKeyPlaceholder();
 }
 
-async function loadLlmStatus() {
+async function loadLlmStatus(options = {}) {
+  const { preferActiveProvider = false } = options;
   try {
     const items = await apiFetch(API.llmKeys);
-    const openrouter = Array.isArray(items) ? items.find((x) => x.provider === "openrouter") : null;
-    setLlmUi({ connected: !!openrouter?.connected, provider: "openrouter" });
-    if (openrouter?.model) {
-      els.llmModelSelect.value = openrouter.model;
+    const active = Array.isArray(items) ? items.find((x) => x.active) : null;
+    if ((preferActiveProvider && active?.provider) || (!state.llmProviderTouched && active?.provider)) {
+      els.llmProviderSelect.value = active.provider;
     }
+    const provider = els.llmProviderSelect.value;
+    const current = Array.isArray(items) ? items.find((x) => x.provider === provider) : null;
+    setLlmUi({ connected: !!current?.connected, provider });
+    updateModelOptions({ provider, selectedModel: current?.model || "" });
   } catch (error) {
-    setLlmUi({ connected: false, provider: "openrouter" });
+    setLlmUi({ connected: false, provider: els.llmProviderSelect.value });
+    updateModelOptions({ provider: els.llmProviderSelect.value, selectedModel: "" });
   }
 }
 
@@ -1215,13 +1348,34 @@ function bindEvents() {
     if (event.key === "Escape" && !els.llmModal.hidden) closeLlmModal();
   });
 
+  els.llmProviderSelect.addEventListener("change", async () => {
+    state.llmProviderTouched = true;
+    updateProviderLogo();
+    updateApiKeyPlaceholder();
+    updateModelOptions({ provider: els.llmProviderSelect.value, selectedModel: "" });
+    await loadLlmStatus({ preferActiveProvider: false });
+  });
+
+  els.llmModelSelect.addEventListener("change", () => {
+    const custom = els.llmModelSelect.value === "__custom__";
+    els.llmCustomModelRow.hidden = !custom;
+    if (custom) els.llmCustomModelInput.focus();
+  });
+
   els.llmConnectBtn.addEventListener("click", async () => {
     const provider = els.llmProviderSelect.value;
     const apiKey = els.llmApiKeyInput.value.trim();
-    const model = els.llmModelSelect.value;
+    const model = els.llmModelSelect.value === "__custom__"
+      ? els.llmCustomModelInput.value.trim()
+      : els.llmModelSelect.value;
     els.llmError.hidden = true;
     if (!apiKey) {
       els.llmError.textContent = "API key is required.";
+      els.llmError.hidden = false;
+      return;
+    }
+    if (!model) {
+      els.llmError.textContent = "Model is required.";
       els.llmError.hidden = false;
       return;
     }
@@ -1262,7 +1416,13 @@ function bindEvents() {
 
   els.llmSaveModelBtn.addEventListener("click", async () => {
     const provider = els.llmProviderSelect.value;
-    const model = els.llmModelSelect.value;
+    const model = els.llmModelSelect.value === "__custom__"
+      ? els.llmCustomModelInput.value.trim()
+      : els.llmModelSelect.value;
+    if (!model) {
+      toast("Model is required.", "error");
+      return;
+    }
     setButtonLoading(els.llmSaveModelBtn, true, "Saving...");
     try {
       await apiFetch(`${API.llmKeys}/${provider}/model`, {

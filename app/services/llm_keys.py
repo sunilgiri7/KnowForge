@@ -62,6 +62,11 @@ def set_user_llm_model(db: Session, *, user: User, provider: str, model: str) ->
     return True
 
 
+def set_active_llm_provider(db: Session, *, user: User, provider: str) -> None:
+    user.llm_active_provider = provider
+    db.add(user)
+
+
 def delete_user_llm_key(db: Session, *, user: User, provider: str) -> bool:
     record = get_user_llm_key(db, user=user, provider=provider)
     if not record:
