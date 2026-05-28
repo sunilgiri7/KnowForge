@@ -63,6 +63,12 @@ class Settings(BaseSettings):
     smtp_from_email: str = "noreply@knowforge.local"
     smtp_use_tls: bool = True
 
+    # Per-user LLM key encryption (for OpenRouter, etc.)
+    # Provide a long random secret (e.g. `python -c 'import secrets;print(secrets.token_urlsafe(32))'`)
+    llm_key_encryption_secret: str | None = None
+
+    openrouter_default_model: str = "openai/gpt-4o-mini"
+
     @property
     def resolved_database_url(self) -> str:
         if self.database_url:

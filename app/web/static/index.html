@@ -112,6 +112,7 @@
             <h2>Chat Board</h2>
           </div>
           <div class="topbar-actions">
+            <button id="llmSettingsBtn" class="secondary-button" type="button">LLM Settings</button>
             <button id="newChatBtn" class="secondary-button" type="button">New Chat</button>
             <button id="compactWikiBtn" class="secondary-button" type="button">Compact Wiki</button>
             <button id="logoutBtn" class="secondary-button" type="button">Logout</button>
@@ -165,6 +166,46 @@
         </div>
       </article>
     </template>
+
+    <div id="llmModal" class="modal-overlay" hidden>
+      <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="llmModalTitle">
+        <div class="modal-header">
+          <strong id="llmModalTitle">LLM Provider Settings</strong>
+          <button id="llmModalCloseBtn" class="icon-button" type="button" title="Close">✕</button>
+        </div>
+        <div class="llm-settings">
+          <label class="llm-label">
+            Provider
+            <select id="llmProviderSelect">
+              <option value="openrouter">OpenRouter</option>
+            </select>
+          </label>
+          <label class="llm-label">
+            API Key
+            <input id="llmApiKeyInput" type="password" placeholder="Paste your OpenRouter key" />
+          </label>
+          <label class="llm-label">
+            Model
+            <select id="llmModelSelect">
+              <option value="openai/gpt-4o-mini">openai/gpt-4o-mini</option>
+              <option value="openai/gpt-4o">openai/gpt-4o</option>
+              <option value="anthropic/claude-3.5-sonnet">anthropic/claude-3.5-sonnet</option>
+              <option value="google/gemini-1.5-pro">google/gemini-1.5-pro</option>
+              <option value="deepseek/deepseek-chat">deepseek/deepseek-chat</option>
+              <option value="qwen/qwen-2.5-72b-instruct">qwen/qwen-2.5-72b-instruct</option>
+              <option value="moonshotai/kimi-k2">moonshotai/kimi-k2</option>
+            </select>
+          </label>
+          <div class="llm-actions">
+            <button id="llmConnectBtn" class="secondary-button" type="button">Connect</button>
+            <button id="llmDisconnectBtn" class="secondary-button" type="button">Disconnect</button>
+            <button id="llmSaveModelBtn" class="secondary-button" type="button">Save model</button>
+            <span id="llmStatusPill" class="status-pill muted">Not connected</span>
+          </div>
+          <div id="llmError" class="inline-error" hidden></div>
+        </div>
+      </div>
+    </div>
 
     <script src="/static/app.js" type="module"></script>
   </body>

@@ -15,6 +15,7 @@ from app.llmwiki.prompts import (
 )
 from app.llmwiki.storage import WikiStore
 from app.llmwiki.text import keyword_summary, safe_format, tokenize, trim_context_to_token_budget, trim_to_chars
+from app.llm.graph import build_chat_flow_graph
 from app.schemas.llmwiki import (
     AgentTrace,
     ChatRequest,
@@ -26,7 +27,7 @@ from app.schemas.llmwiki import (
 
 
 class ChatService:
-    def __init__(self, store: WikiStore, llm: GroqClient | None = None):
+    def __init__(self, store: WikiStore, llm: object | None = None):
         self.store = store
         self.llm = llm or GroqClient()
         self.indexer = WikiIndexer(store)
@@ -63,53 +64,17 @@ class ChatService:
                 knowledge_gap_created=False,
                 agent_trace=trace,
             )
-        plan = await self.harness.plan(request, history)
+        flow = build_chat_flow_graph(self).compile()
+        state = await flow.ainvoke({"request": request, "history": history})
+        plan = state["plan"]
         decision = plan.decision
-        retrieval_question = plan.retrieval_question
-        context = plan.context
-        used_pages = plan.used_pages
         trace = plan.traces
-        fallback_context, fallback_ids = ("", [])
-        if decision.route == "fallback" and decision.page_slugs and request.allow_fallback:
-            fallback_context, fallback_ids = self._raw_fallback_context(request.question)
-            if fallback_context:
-                context = (context + "\n\n---\n\n" if context else "") + fallback_context
-                trace.append(
-                    AgentTrace(
-                        agent="fallback_retriever",
-                        action="loaded_raw_sources",
-                        confidence=0.55,
-                        notes=", ".join(fallback_ids[:5]),
-                    )
-                )
+        context = state.get("context", "")
+        used_pages = state.get("used_pages", []) or plan.used_pages
+        fallback_ids = state.get("fallback_ids", [])
 
-        if decision.route == "direct" or not context.strip():
-            answer, llm_answered, llm_error = await self._generate_direct_answer(
-                request.question,
-                history,
-            )
-            answer = self._clean_answer_text(answer)
-            trace.append(
-                AgentTrace(
-                    agent="direct_assistant",
-                    action="answered_without_wiki_context" if llm_answered else "llm_unavailable",
-                    confidence=0.9 if llm_answered else 0.0,
-                    notes=llm_error or "No wiki/source context was available; used direct LLM.",
-                )
-            )
-            return ChatResponse(
-                session_id=request.session_id,
-                answer=answer,
-                route="direct",
-                difficulty=decision.difficulty,
-                citations=[],
-                used_pages=[],
-                knowledge_gap_created=False,
-                agent_trace=trace,
-            )
-
-        if decision.difficulty == "hard":
-            plan_notes = await self._plan_hard_question(retrieval_question, context)
+        if decision.difficulty == "hard" and context.strip():
+            plan_notes = await self._plan_hard_question(plan.retrieval_question, context)
             trace.append(
                 AgentTrace(
                     agent="planner",
@@ -118,15 +83,29 @@ class ChatService:
                     notes=plan_notes,
                 )
             )
+        if decision.route == "fallback" and fallback_ids:
+            trace.append(
+                AgentTrace(
+                    agent="fallback_retriever",
+                    action="loaded_raw_sources",
+                    confidence=0.55,
+                    notes=", ".join(fallback_ids[:5]),
+                )
+            )
 
-        answer, used_local_fallback = await self._generate_answer(
-            request.question,
-            history,
-            context,
-            route_confidence=decision.confidence,
-        )
-        answer = self._clean_answer_text(answer)
-        if used_local_fallback:
+        answer = self._clean_answer_text(state.get("answer", ""))
+        used_local_fallback = bool(state.get("used_local_fallback"))
+        if decision.route == "direct":
+            # direct path trace
+            trace.append(
+                AgentTrace(
+                    agent="direct_assistant",
+                    action="answered_without_wiki_context" if self.llm.available else "llm_unavailable",
+                    confidence=0.9 if self.llm.available else 0.0,
+                    notes="Answered directly.",
+                )
+            )
+        elif used_local_fallback:
             trace.append(
                 AgentTrace(
                     agent="local_fallback",
@@ -135,22 +114,14 @@ class ChatService:
                     notes="LLM unavailable; served deterministic wiki excerpts.",
                 )
             )
-        verified, verifier_note, verifier_confidence = await self._verify(
-            request.question,
-            context,
-            answer,
-        )
         trace.append(
             AgentTrace(
                 agent="verifier",
-                action="supported" if verified else "needs_more_evidence",
-                confidence=verifier_confidence,
-                notes=verifier_note,
+                action="supported" if state.get("verified", False) else "needs_more_evidence",
+                confidence=float(state.get("verifier_confidence", 0.5)),
+                notes=str(state.get("verifier_note", "")),
             )
         )
-        gap_created = False
-        if not verified or decision.route == "fallback":
-            gap_created = self._record_gap(request.question, decision, fallback_ids)
 
         citations = self._citations(answer, used_pages, fallback_ids)
         return ChatResponse(
@@ -160,7 +131,7 @@ class ChatService:
             difficulty=decision.difficulty,
             citations=citations,
             used_pages=used_pages,
-            knowledge_gap_created=gap_created,
+            knowledge_gap_created=bool(state.get("knowledge_gap_created", False)),
             agent_trace=trace,
         )
 

@@ -9,6 +9,7 @@ const API = {
   upload: "/api/v1/sources/upload",
   wikiPages: "/api/v1/wiki/pages",
   compact: "/api/v1/wiki/compact",
+  llmKeys: "/api/v1/llm/keys",
 };
 
 const AUTH_KEY = "knowforge.auth.v1";
@@ -93,7 +94,56 @@ const els = {
   sidebarOpenBtn: document.querySelector("#sidebarOpenBtn"),
   sidebarResizer: document.querySelector("#sidebarResizer"),
   sidebarLogoWrap: document.querySelector("#sidebarLogoWrap"),
+  llmSettingsBtn: document.querySelector("#llmSettingsBtn"),
+  llmModal: document.querySelector("#llmModal"),
+  llmModalCloseBtn: document.querySelector("#llmModalCloseBtn"),
+  llmProviderSelect: document.querySelector("#llmProviderSelect"),
+  llmApiKeyInput: document.querySelector("#llmApiKeyInput"),
+  llmConnectBtn: document.querySelector("#llmConnectBtn"),
+  llmDisconnectBtn: document.querySelector("#llmDisconnectBtn"),
+  llmSaveModelBtn: document.querySelector("#llmSaveModelBtn"),
+  llmStatusPill: document.querySelector("#llmStatusPill"),
+  llmError: document.querySelector("#llmError"),
+  llmModelSelect: document.querySelector("#llmModelSelect"),
 };
+
+function openLlmModal() {
+  els.llmModal.hidden = false;
+  document.body.classList.add("modal-open");
+  loadLlmStatus();
+}
+
+function closeLlmModal() {
+  els.llmModal.hidden = true;
+  document.body.classList.remove("modal-open");
+}
+
+function setLlmUi({ connected, provider }) {
+  els.llmError.hidden = true;
+  els.llmError.textContent = "";
+  els.llmDisconnectBtn.disabled = !connected;
+  els.llmConnectBtn.disabled = connected;
+  els.llmProviderSelect.disabled = connected;
+  els.llmApiKeyInput.disabled = connected;
+  els.llmSaveModelBtn.disabled = !connected;
+  els.llmStatusPill.textContent = connected ? `Connected (${provider})` : "Not connected";
+  els.llmStatusPill.classList.toggle("muted", !connected);
+  els.llmSettingsBtn?.classList.toggle("llm-connected", !!connected);
+  els.llmSettingsBtn?.classList.toggle("llm-disconnected", !connected);
+}
+
+async function loadLlmStatus() {
+  try {
+    const items = await apiFetch(API.llmKeys);
+    const openrouter = Array.isArray(items) ? items.find((x) => x.provider === "openrouter") : null;
+    setLlmUi({ connected: !!openrouter?.connected, provider: "openrouter" });
+    if (openrouter?.model) {
+      els.llmModelSelect.value = openrouter.model;
+    }
+  } catch (error) {
+    setLlmUi({ connected: false, provider: "openrouter" });
+  }
+}
 
 function loadSidebarLayout() {
   try {
@@ -359,7 +409,7 @@ async function bootstrapAuth() {
   try {
     state.user = await apiFetch(API.me);
     showApp(true);
-    await Promise.all([loadWikiPages(), loadSessions()]);
+    await Promise.all([loadWikiPages(), loadSessions(), loadLlmStatus()]);
     
     const savedSessionId = localStorage.getItem(ACTIVE_SESSION_KEY);
     if (savedSessionId && state.sessions.some((s) => s.id === savedSessionId)) {
@@ -1155,6 +1205,79 @@ function bindEvents() {
     }
   });
   els.logoutBtn.addEventListener("click", () => logout());
+
+  els.llmSettingsBtn.addEventListener("click", () => openLlmModal());
+  els.llmModalCloseBtn.addEventListener("click", () => closeLlmModal());
+  els.llmModal.addEventListener("click", (event) => {
+    if (event.target === els.llmModal) closeLlmModal();
+  });
+  window.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !els.llmModal.hidden) closeLlmModal();
+  });
+
+  els.llmConnectBtn.addEventListener("click", async () => {
+    const provider = els.llmProviderSelect.value;
+    const apiKey = els.llmApiKeyInput.value.trim();
+    const model = els.llmModelSelect.value;
+    els.llmError.hidden = true;
+    if (!apiKey) {
+      els.llmError.textContent = "API key is required.";
+      els.llmError.hidden = false;
+      return;
+    }
+    setButtonLoading(els.llmConnectBtn, true, "Connecting...");
+    try {
+      await apiFetch(API.llmKeys, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider, api_key: apiKey, model }),
+        timeout: 45000,
+      });
+      els.llmApiKeyInput.value = "";
+      toast("LLM provider connected.");
+      await loadLlmStatus();
+    } catch (error) {
+      els.llmError.textContent = error.message;
+      els.llmError.hidden = false;
+      toast(error.message, "error");
+    } finally {
+      setButtonLoading(els.llmConnectBtn, false);
+    }
+  });
+
+  els.llmDisconnectBtn.addEventListener("click", async () => {
+    const provider = els.llmProviderSelect.value;
+    setButtonLoading(els.llmDisconnectBtn, true, "Disconnecting...");
+    try {
+      await apiFetch(`${API.llmKeys}/${provider}`, { method: "DELETE" });
+      toast("LLM provider disconnected.");
+      setLlmUi({ connected: false, provider });
+      await loadLlmStatus();
+    } catch (error) {
+      toast(error.message, "error");
+    } finally {
+      setButtonLoading(els.llmDisconnectBtn, false);
+    }
+  });
+
+  els.llmSaveModelBtn.addEventListener("click", async () => {
+    const provider = els.llmProviderSelect.value;
+    const model = els.llmModelSelect.value;
+    setButtonLoading(els.llmSaveModelBtn, true, "Saving...");
+    try {
+      await apiFetch(`${API.llmKeys}/${provider}/model`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model }),
+      });
+      toast("Model updated.");
+      await loadLlmStatus();
+    } catch (error) {
+      toast(error.message, "error");
+    } finally {
+      setButtonLoading(els.llmSaveModelBtn, false);
+    }
+  });
 
   els.pdfInput.addEventListener("change", () => uploadPdf(els.pdfInput.files?.[0]));
   for (const eventName of ["dragenter", "dragover"]) {

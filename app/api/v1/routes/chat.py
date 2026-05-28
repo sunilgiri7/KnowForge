@@ -27,6 +27,8 @@ from app.services.chat_sessions import (
     session_item,
     thread_context_for_parent,
 )
+from app.services.llm_keys import get_user_llm_key_plaintext, get_user_llm_key
+from app.llm.providers.openrouter_llm import OpenRouterLlm
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
@@ -54,7 +56,13 @@ async def chat(
         parent_id=request.parent_id,
         interaction=request.interaction,
     )
-    response = await ChatService(wiki_store_for_user(user)).answer(request)
+    user_llm = None
+    record = get_user_llm_key(db, user=user, provider="openrouter")
+    if record:
+        key = get_user_llm_key_plaintext(db, user=user, provider="openrouter")
+        if key:
+            user_llm = OpenRouterLlm(api_key=key, model=(record.model or None))
+    response = await ChatService(wiki_store_for_user(user), llm=user_llm).answer(request)
     add_message(
         db,
         user=user,

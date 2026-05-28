@@ -47,6 +47,21 @@ class WikiPageRename(BaseModel):
     title: str = Field(min_length=1, max_length=240)
 
 
+LlmProvider = Literal["openrouter"]
+
+
+class LlmKeyUpsertRequest(BaseModel):
+    provider: LlmProvider
+    api_key: str = Field(min_length=6, max_length=4000)
+    model: str | None = Field(default=None, max_length=120)
+
+
+class LlmKeyStatus(BaseModel):
+    provider: LlmProvider
+    connected: bool
+    model: str = ""
+
+
 class WikiPageListItem(BaseModel):
     title: str
     slug: str

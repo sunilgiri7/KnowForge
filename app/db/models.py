@@ -81,3 +81,16 @@ class ChatMessageRecord(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
     session: Mapped[ChatSession] = relationship(back_populates="messages")
+
+
+class UserLlmKey(Base):
+    __tablename__ = "user_llm_keys"
+    __table_args__ = (UniqueConstraint("user_id", "provider", name="uq_user_llm_provider"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    provider: Mapped[str] = mapped_column(String(40), index=True)
+    encrypted_key: Mapped[str] = mapped_column(Text)
+    model: Mapped[str] = mapped_column(String(120), default="", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
