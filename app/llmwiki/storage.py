@@ -88,6 +88,30 @@ class WikiStore:
             self.rebuild_index()
             return page
 
+    def rename_page(self, slug: str, title: str) -> WikiPage:
+        with self._lock:
+            page = self.read_page(slug)
+            page.meta.title = title.strip()
+            page.meta.last_compiled_at = now_iso()
+            self._atomic_write(self.page_path(page.meta.slug), render_page(page))
+            self.rebuild_index()
+            return page
+
+    def delete_page(self, slug: str) -> None:
+        path = self.page_path(slug)
+        compact_path = self.compact_path(slug)
+        with self._lock:
+            if not path.exists():
+                raise KnowForgeError(
+                    "Wiki page not found.",
+                    status_code=404,
+                    code="wiki_page_not_found",
+                )
+            path.unlink()
+            if compact_path.exists():
+                compact_path.unlink()
+            self.rebuild_index()
+
     def save_source(self, source_id: str, filename: str, data: bytes, text: str) -> None:
         directory = self.source_dir(source_id)
         self._atomic_write_bytes(directory / filename, data)

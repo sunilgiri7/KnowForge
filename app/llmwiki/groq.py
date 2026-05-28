@@ -14,10 +14,13 @@ class GroqClient:
         api_key: str | None = None,
         model: str | None = None,
         max_completion_tokens: int | None = None,
+        timeout_seconds: float | None = None,
     ):
         self.api_key = api_key if api_key is not None else settings.groq_api_key
         self.model = model or settings.groq_model
         self.max_completion_tokens = max_completion_tokens or settings.groq_max_completion_tokens
+        # Allow per-instance timeout so the compilation client can wait longer
+        self.timeout_seconds = timeout_seconds or settings.groq_timeout_seconds
 
     @property
     def available(self) -> bool:
@@ -28,7 +31,7 @@ class GroqClient:
             raise RuntimeError("GROQ_API_KEY is not configured.")
         return await asyncio.wait_for(
             asyncio.to_thread(self._generate_text_sync, prompt, temperature),
-            timeout=settings.groq_timeout_seconds,
+            timeout=self.timeout_seconds,
         )
 
     async def generate_json(self, prompt: str, *, temperature: float = 0.1) -> dict[str, Any]:

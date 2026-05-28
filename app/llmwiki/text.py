@@ -73,3 +73,50 @@ def keyword_summary(text: str, *, max_sentences: int = 8) -> str:
 def slugify(value: str) -> str:
     slug = re.sub(r"[^a-zA-Z0-9]+", "-", value.lower()).strip("-")
     return slug or "untitled"
+
+
+# ── Prompt safe-formatting ────────────────────────────────────────────────────
+
+def safe_format(template: str, **kwargs: object) -> str:
+    """Format a prompt template safely.
+
+    Unlike str.format(), this replaces {key} placeholders using simultaneous
+    regex substitution so that:
+      - { and } characters inside values never cause KeyError/ValueError
+      - Values containing other {placeholder} patterns are treated as literals
+      - Works correctly even when PDF text, wiki content, or code is embedded
+
+    All values are converted to str before substitution.
+    """
+    if not kwargs:
+        return template
+    str_kwargs = {k: str(v) for k, v in kwargs.items()}
+    # Build pattern that matches only the known keys in this template
+    key_pattern = re.compile(
+        r"\{(" + "|".join(re.escape(k) for k in str_kwargs) + r")\}"
+    )
+    return key_pattern.sub(lambda m: str_kwargs[m.group(1)], template)
+
+
+# ── Context token budget helpers ─────────────────────────────────────────────
+
+def count_approx_tokens(text: str) -> int:
+    """Rough estimate: 1 token ≈ 4 characters (Llama/GPT heuristic)."""
+    return max(1, len(text) // 4)
+
+
+def trim_context_to_token_budget(
+    context: str,
+    *,
+    token_budget: int,
+    reserve_for_prompt: int = 1500,
+    reserve_for_output: int = 1024,
+) -> str:
+    """Trim context so the total prompt stays within token_budget.
+
+    Leaves headroom for the prompt template and expected output to prevent
+    Groq rate-limit (429) errors on high-token requests.
+    """
+    available = token_budget - reserve_for_prompt - reserve_for_output
+    char_limit = max(2000, available * 4)
+    return trim_to_chars(context, char_limit)

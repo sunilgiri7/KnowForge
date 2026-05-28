@@ -122,7 +122,7 @@ button {
 
 .app-shell {
   display: grid;
-  grid-template-columns: minmax(260px, 300px) minmax(0, 1fr);
+  grid-template-columns: 340px minmax(0, 1fr);
   height: 100dvh;
   min-height: 0;
   overflow: hidden;
@@ -133,10 +133,11 @@ button {
   flex-direction: column;
   gap: 16px;
   min-height: 0;
-  overflow-y: auto;
+  overflow: hidden;
   padding: 18px;
   border-right: 1px solid var(--line);
   background: #fbfcfc;
+  position: relative;
 }
 
 .brand-block {
@@ -144,6 +145,8 @@ button {
   align-items: center;
   gap: 12px;
   min-height: 52px;
+  flex-shrink: 0;
+  position: relative;
 }
 
 .brand-mark {
@@ -163,6 +166,41 @@ button {
   display: block;
   border-radius: calc(var(--radius) - 2px);
   object-fit: cover;
+}
+
+.brand-copy {
+  min-width: 0;
+}
+
+.sidebar-toggle {
+  margin-left: auto;
+  width: 32px;
+  height: 32px;
+  display: inline-grid;
+  place-items: center;
+}
+
+.sidebar-open-btn {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 30px;
+  height: 30px;
+  display: none;
+  place-items: center;
+  opacity: 0;
+  transition: opacity 0.16s ease;
+}
+
+.sidebar-toggle::before,
+.sidebar-open-btn::before {
+  content: "";
+  width: 16px;
+  height: 14px;
+  border: 1.8px solid currentColor;
+  border-radius: 4px;
+  background: linear-gradient(to right, transparent 0 7px, currentColor 7px 8px, transparent 8px);
 }
 
 .brand-block h1,
@@ -192,6 +230,8 @@ button {
   border-radius: var(--radius);
   background: var(--surface);
   box-shadow: 0 1px 0 rgba(23, 32, 29, 0.02);
+  flex-shrink: 0;
+  overflow: hidden;
 }
 
 .panel-heading {
@@ -259,12 +299,110 @@ button {
 }
 
 .wiki-panel {
-  min-height: 220px;
+  display: flex;
+  flex-direction: column;
+  min-height: 200px;
+  max-height: 34vh;
+  overflow: hidden;
+}
+
+.session-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 200px;
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: 38vh;
+  overflow: hidden;
 }
 
 .wiki-list {
   display: grid;
   gap: 8px;
+  overflow-y: auto;
+  min-height: 0;
+  padding-right: 4px;
+  scrollbar-width: thin;
+  scrollbar-color: #9aa9a5 transparent;
+}
+
+.wiki-list::-webkit-scrollbar {
+  width: 6px;
+}
+
+.wiki-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.wiki-list::-webkit-scrollbar-thumb {
+  background: #9aa9a5;
+  border-radius: 999px;
+}
+
+#wikiList,
+#sessionList {
+  flex: 1 1 auto;
+}
+
+.wiki-panel #emptyWiki,
+.session-panel #emptySessions {
+  margin-top: 8px;
+}
+
+.sidebar-resizer {
+  position: absolute;
+  top: 0;
+  right: -4px;
+  width: 8px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 60;
+}
+
+.sidebar-resizer::before {
+  content: "";
+  position: absolute;
+  inset: 0 2px;
+  background: transparent;
+}
+
+.sidebar.collapsed {
+  padding: 14px 10px;
+  gap: 12px;
+}
+
+.sidebar.collapsed .brand-copy,
+.sidebar.collapsed .panel,
+.sidebar.collapsed .sidebar-toggle,
+.sidebar.collapsed .sidebar-resizer {
+  display: none;
+}
+
+.sidebar.collapsed .brand-block {
+  justify-content: center;
+}
+
+.sidebar.collapsed .brand-mark {
+  width: 44px;
+  height: 44px;
+  cursor: pointer;
+  position: relative;
+  opacity: 1;
+  transition: opacity 0.14s ease;
+}
+
+.sidebar.collapsed:hover .sidebar-open-btn {
+  display: inline-grid;
+  opacity: 1;
+}
+
+.sidebar.collapsed:hover .brand-mark {
+  opacity: 0;
+}
+
+body.resizing-sidebar {
+  cursor: col-resize;
+  user-select: none;
 }
 
 .wiki-item {
@@ -279,6 +417,7 @@ button {
 .session-item {
   position: relative;
   width: 100%;
+  overflow: visible;
 }
 
  .session-item.active .wiki-item {
@@ -306,6 +445,7 @@ button {
   height: auto;
   background: var(--surface);
   border-color: var(--accent-soft);
+  overflow: visible;
 }
 
 
@@ -366,6 +506,7 @@ button {
 .edit-controls {
   display: flex;
   justify-content: center;
+  align-items: center;
   gap: 10px;
   margin-top: 10px;
 }
@@ -376,6 +517,20 @@ button {
   padding: 0;
   font-size: 18px;
   border-radius: 10px;
+  display: inline-grid;
+  place-items: center;
+  line-height: 1;
+}
+
+.edit-controls .session-action.confirm,
+.edit-controls .session-action.cancel {
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  text-align: center;
+  display: inline-grid;
+  place-items: center;
+  line-height: 1;
 }
 
 .session-menu-btn,
@@ -514,7 +669,7 @@ button {
   background: var(--accent-soft);
 }
 
-#wikiList .wiki-item {
+#wikiList .wiki-item:not(.session-row) {
   height: 72px;
   padding: 12px 14px;
   display: flex;
@@ -526,19 +681,67 @@ button {
   min-width: 0;
 }
 
-#wikiList .wiki-item strong {
+#wikiList .wiki-item:not(.session-row) strong {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   width: 100%;
 }
 
-#wikiList .wiki-item span {
+#wikiList .wiki-item:not(.session-row) span {
   display: block;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   width: 100%;
+}
+
+#wikiList .wiki-item.session-row {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  min-width: 0;
+}
+
+#wikiList .wiki-page-item .session-details {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+#wikiList .wiki-page-item .session-actions {
+  flex: 0 0 auto;
+  align-self: center;
+}
+
+#wikiList .wiki-page-item.editing .wiki-item.session-row.editing {
+  height: auto;
+  min-height: 0;
+  display: block;
+  align-items: stretch;
+  overflow: visible;
+  padding-top: 10px;
+  padding-bottom: 10px;
+}
+
+#wikiList .wiki-page-item.editing .session-details {
+  display: grid;
+  gap: 8px;
+  width: 100%;
+}
+
+#wikiList .wiki-page-item.editing {
+  position: static;
+}
+
+#wikiList {
+  grid-auto-rows: max-content;
+}
+
+#wikiList .wiki-page-item .session-menu {
+  top: 12px;
+  right: 10px;
+  transform: none;
 }
 
 .chat-area {
@@ -803,6 +1006,33 @@ button {
 .message-body pre code {
   padding: 0;
   background: transparent;
+}
+
+.message-body .table-wrap {
+  margin: 12px 0;
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.message-body table {
+  width: 100%;
+  min-width: 460px;
+  border-collapse: collapse;
+  background: var(--surface);
+}
+
+.message-body th,
+.message-body td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  font-size: 13px;
+}
+
+.message-body th {
+  background: var(--surface-2);
+  font-weight: 700;
 }
 
 .agent-thinking {

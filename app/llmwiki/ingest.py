@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from io import BytesIO
 from typing import Any, TypedDict
 
@@ -9,8 +10,21 @@ from app.llmwiki.compaction import WikiCompactor
 from app.llmwiki.groq import GroqClient
 from app.llmwiki.prompts import CHUNK_NOTES_PROMPT, COMPILE_PROMPT, SYNTHESIZE_WIKI_PROMPT
 from app.llmwiki.storage import WikiStore
-from app.llmwiki.text import keyword_summary, slugify, trim_to_chars
+from app.llmwiki.text import keyword_summary, safe_format, slugify, trim_to_chars
 from app.schemas.llmwiki import SourceUploadResponse
+
+# Matches 2+ number tokens in a single line — reliable table-row indicator
+_MULTI_NUMBER_RE = re.compile(
+    r"\b\d[\d,]*(?:\.\d+)?\b.*\b\d[\d,]*(?:\.\d+)?\b"
+)
+
+# Numbered section heading: "5 Compensation" / "5. Benefits" / "5.1 Overview"
+_NUMBERED_SECTION_RE = re.compile(r"^\d+\.?\d*\s+[A-Z][A-Za-z]")
+
+# Addendum / Schedule / Annexure / Exhibit / Appendix headings
+_ADDENDUM_RE = re.compile(
+    r"^(Addendum|Schedule|Annexure|Exhibit|Appendix)\b", re.IGNORECASE
+)
 
 
 class CompileState(TypedDict, total=False):
@@ -29,7 +43,13 @@ class CompileState(TypedDict, total=False):
 class SourceIngestor:
     def __init__(self, store: WikiStore, llm: GroqClient | None = None):
         self.store = store
+        # Standard client: 2048 tokens / 40s timeout — used for answering & compaction
         self.llm = llm or GroqClient()
+        # Compile client: higher token budget + longer timeout — used ONLY during ingestion
+        self.compile_llm = GroqClient(
+            max_completion_tokens=settings.groq_compile_max_completion_tokens,
+            timeout_seconds=settings.groq_compile_timeout_seconds,
+        )
         self.compactor = WikiCompactor(store, self.llm)
 
     async def ingest_pdf(
@@ -146,7 +166,7 @@ class SourceIngestor:
 
     async def _chunk_notes_node(self, state: CompileState) -> CompileState:
         clean_text = state["clean_text"]
-        if not self.llm.available:
+        if not self.compile_llm.available:
             state["chunk_notes"] = []
             return state
         notes: list[dict[str, Any]] = []
@@ -154,11 +174,12 @@ class SourceIngestor:
         for index, chunk in enumerate(chunks, start=1):
             try:
                 notes.append(
-                    await self.llm.generate_json(
-                        CHUNK_NOTES_PROMPT.format(
+                    await self.compile_llm.generate_json(
+                        safe_format(
+                            CHUNK_NOTES_PROMPT,
                             source_id=state["source_id"],
                             filename=state["filename"],
-                            chunk_number=index,
+                            chunk_number=str(index),
                             chunk_text=chunk,
                         ),
                         temperature=0.05,
@@ -180,22 +201,24 @@ class SourceIngestor:
 
     async def _llm_compile_node(self, state: CompileState) -> CompileState:
         clean_text = state["clean_text"]
-        if not self.llm.available:
+        if not self.compile_llm.available:
             return state
         try:
             if state.get("chunk_notes"):
-                state["payload"] = await self.llm.generate_json(
-                    SYNTHESIZE_WIKI_PROMPT.format(
+                state["payload"] = await self.compile_llm.generate_json(
+                    safe_format(
+                        SYNTHESIZE_WIKI_PROMPT,
                         source_id=state["source_id"],
                         filename=state["filename"],
-                        chunk_notes=state["chunk_notes"],
+                        chunk_notes=str(state["chunk_notes"]),
                         source_excerpt=self._representative_excerpt(clean_text),
                     ),
                     temperature=0.08,
                 )
             else:
-                state["payload"] = await self.llm.generate_json(
-                    COMPILE_PROMPT.format(
+                state["payload"] = await self.compile_llm.generate_json(
+                    safe_format(
+                        COMPILE_PROMPT,
                         source_id=state["source_id"],
                         filename=state["filename"],
                         source_text=trim_to_chars(clean_text, settings.wiki_context_char_budget),
@@ -245,12 +268,15 @@ class SourceIngestor:
         cleaned = SourceIngestor._clean_extracted_text(text)
         sections = SourceIngestor._split_sections(cleaned)
         summary = SourceIngestor._summary_from_sections(sections, cleaned)
+
         section_blocks = []
         for section_title, lines in sections:
             if section_title.lower() == "summary":
                 continue
-            bullets = "\n".join(f"- {line}" for line in lines)
-            section_blocks.append(f"## {section_title}\n\n{bullets}")
+            # Detect and render table groups within section lines
+            rendered_content = SourceIngestor._render_section_content(lines)
+            section_blocks.append(f"## {section_title}\n\n{rendered_content}")
+
         compiled_sections = trim_to_chars(
             "\n\n".join(section_blocks),
             max(18_000, settings.wiki_page_soft_char_limit - 5_000),
@@ -264,6 +290,52 @@ class SourceIngestor:
         )
         tags = SourceIngestor._infer_tags(title, cleaned)
         return title, summary, tags, content
+
+    @staticmethod
+    def _render_section_content(lines: list[str]) -> str:
+        """Render lines as either a Markdown table (if they look like table rows) or bullets."""
+        if not lines:
+            return ""
+        # Detect if most lines look like structured data (table rows)
+        structured_count = sum(
+            1 for line in lines if SourceIngestor._looks_like_structured_data(line)
+        )
+        if structured_count >= max(2, len(lines) // 3):
+            # Render as table
+            header_written = False
+            rows = []
+            for line in lines:
+                # Try to split on multiple spaces (tab-like separators)
+                parts = re.split(r"\s{2,}|\t", line.strip())
+                if len(parts) >= 2:
+                    rows.append(parts)
+                else:
+                    # Single-column line — treat as label row
+                    rows.append([line.strip()])
+
+            if rows:
+                # Determine max columns
+                max_cols = max(len(r) for r in rows)
+                if max_cols >= 2:
+                    header = "| " + " | ".join(f"Col {i+1}" for i in range(max_cols)) + " |"
+                    separator = "| " + " | ".join(["---"] * max_cols) + " |"
+                    table_lines = [header, separator]
+                    for row in rows:
+                        padded = row + [""] * (max_cols - len(row))
+                        table_lines.append("| " + " | ".join(padded) + " |")
+                    return "\n".join(table_lines)
+
+        # Default: render as bullets
+        return "\n".join(f"- {line}" for line in lines)
+
+    @staticmethod
+    def _looks_like_structured_data(line: str) -> bool:
+        """Return True if a line looks like a table row or structured numerical data."""
+        stripped = line.strip()
+        if not stripped:
+            return False
+        # Two or more number tokens in one line → table row
+        return bool(_MULTI_NUMBER_RE.search(stripped))
 
     @staticmethod
     def _clean_extracted_text(text: str) -> str:
@@ -282,6 +354,13 @@ class SourceIngestor:
             line = line.lstrip("- ").strip() if had_bullet else line
             if not line or line == previous_clean:
                 continue
+
+            # Never join a structured data line with its predecessor — insert a blank separator
+            if SourceIngestor._looks_like_structured_data(line):
+                previous_clean = line
+                lines.append(line)
+                continue
+
             should_join = lines and SourceIngestor._should_join_with_previous(
                 lines[-1],
                 line,
@@ -308,6 +387,11 @@ class SourceIngestor:
         if SourceIngestor._is_heading(previous) or SourceIngestor._is_heading(current):
             return False
         if SourceIngestor._looks_like_label(current):
+            return False
+        # Never join structured/tabular data lines
+        if SourceIngestor._looks_like_structured_data(current):
+            return False
+        if SourceIngestor._looks_like_structured_data(previous):
             return False
         if "@" in current or "|" in current:
             return False
@@ -340,43 +424,15 @@ class SourceIngestor:
 
     @staticmethod
     def _split_sections(text: str) -> list[tuple[str, list[str]]]:
-        headings = {
-            "ABSTRACT",
-            "INTRODUCTION",
-            "BACKGROUND",
-            "METHODOLOGY",
-            "METHOD",
-            "METHODS",
-            "RESULTS",
-            "DISCUSSION",
-            "CONCLUSION",
-            "LIMITATIONS",
-            "REFERENCES",
-            "SUMMARY",
-            "PROFILE",
-            "CONTACT",
-            "WORK EXPERIENCE",
-            "EXPERIENCE",
-            "SKILLS",
-            "PROJECTS",
-            "EDUCATION",
-            "CERTIFICATIONS",
-            "CERTIFICATION",
-            "ACHIEVEMENTS",
-            "EMPLOYMENT",
-            "DUTIES",
-            "COMPENSATION",
-            "TERMINATION",
-            "GOVERNING LAW",
-        }
+        """Dynamically detect section headings — works for any document type."""
         sections: list[tuple[str, list[str]]] = []
         current_title = "Key Facts"
         current_lines: list[str] = []
         for line in SourceIngestor._meaningful_lines(text):
-            if SourceIngestor._is_heading(line) and line.strip().upper() in headings:
+            if SourceIngestor._is_section_heading(line):
                 if current_lines:
                     sections.append((current_title, current_lines))
-                current_title = line.title()
+                current_title = line.strip()
                 current_lines = []
                 continue
             current_lines.append(line.lstrip("- ").strip())
@@ -385,13 +441,37 @@ class SourceIngestor:
         return sections or [("Key Facts", SourceIngestor._meaningful_lines(text))]
 
     @staticmethod
+    def _is_section_heading(line: str) -> bool:
+        """Broad heading detection that works across document types."""
+        stripped = line.strip()
+        # Page markers from PDF extraction
+        if stripped.startswith("--- Page ") and stripped.endswith("---"):
+            return True
+        # All-caps headings (2–6 words): COMPENSATION, WORK EXPERIENCE, etc.
+        if stripped.isupper() and 1 <= len(stripped.split()) <= 6 and len(stripped) >= 3:
+            return True
+        # Numbered sections: "5 Compensation" / "5. Benefits" / "5.1 Overview"
+        if _NUMBERED_SECTION_RE.match(stripped) and len(stripped.split()) <= 10:
+            return True
+        # Addendum / Schedule / Annexure / Exhibit / Appendix
+        if _ADDENDUM_RE.match(stripped) and len(stripped.split()) <= 8:
+            return True
+        # Markdown headings (already cleaned text might have these)
+        if stripped.startswith(("# ", "## ", "### ")):
+            return True
+        return False
+
+    @staticmethod
     def _is_heading(line: str) -> bool:
+        """Legacy heading check used during chunking boundary detection."""
         stripped = line.strip()
         if stripped.startswith("--- Page ") and stripped.endswith("---"):
             return True
         if stripped.isupper() and len(stripped.split()) <= 6:
             return True
-        if stripped[:2].isdigit() and len(stripped.split()) <= 8:
+        if _NUMBERED_SECTION_RE.match(stripped) and len(stripped.split()) <= 8:
+            return True
+        if _ADDENDUM_RE.match(stripped) and len(stripped.split()) <= 8:
             return True
         return False
 
@@ -417,24 +497,41 @@ class SourceIngestor:
 
     @staticmethod
     def _chunk_document(text: str) -> list[str]:
+        """Split text into overlapping chunks to avoid losing facts at boundaries."""
         lines = text.splitlines()
         chunks: list[str] = []
         current: list[str] = []
         current_len = 0
         limit = settings.wiki_compile_chunk_chars
+        overlap_chars = 600  # overlap between adjacent chunks
+
+        def _make_overlap(buf: list[str]) -> tuple[list[str], int]:
+            """Return the last ~overlap_chars worth of lines from buf."""
+            overlap: list[str] = []
+            acc = 0
+            for ol in reversed(buf):
+                line_len = len(ol) + 1
+                if acc + line_len > overlap_chars:
+                    break
+                overlap.insert(0, ol)
+                acc += line_len
+            return overlap, acc
+
         for line in lines:
             line_len = len(line) + 1
             boundary = SourceIngestor._is_heading(line) or line.startswith("--- Page ")
             if current and current_len + line_len > limit and boundary:
                 chunks.append("\n".join(current).strip())
-                current = []
-                current_len = 0
+                overlap, overlap_len = _make_overlap(current)
+                current = overlap
+                current_len = overlap_len
             current.append(line)
             current_len += line_len
             if current_len >= limit * 1.25:
                 chunks.append("\n".join(current).strip())
-                current = []
-                current_len = 0
+                overlap, overlap_len = _make_overlap(current)
+                current = overlap
+                current_len = overlap_len
         if current:
             chunks.append("\n".join(current).strip())
         if len(chunks) > settings.wiki_compile_max_chunks:
@@ -456,11 +553,9 @@ class SourceIngestor:
 
     @staticmethod
     def _summary_from_sections(sections: list[tuple[str, list[str]]], text: str) -> str:
-        document_summary = SourceIngestor._document_specific_summary(text)
-        if document_summary:
-            return document_summary
+        """Generate a generic summary — no document-type-specific hardcoding."""
         for title, lines in sections:
-            if title.lower() == "summary" and lines:
+            if title.lower() in ("summary", "abstract", "overview") and lines:
                 meaningful = [line for line in lines if SourceIngestor._is_summary_line(line)]
                 if meaningful:
                     return trim_to_chars(" ".join(meaningful[:4]), 700)
@@ -468,20 +563,22 @@ class SourceIngestor:
 
     @staticmethod
     def _first_sentences(text: str, *, count: int) -> str:
-        cleaned = "\n".join(
-            line
-            for line in SourceIngestor._meaningful_lines(text)
-            if SourceIngestor._is_summary_line(line)
-        )
-        summary = keyword_summary(cleaned, max_sentences=count)
-        if summary:
-            return summary
-        lines = [
-            line
-            for line in SourceIngestor._meaningful_lines(text)
-            if SourceIngestor._is_summary_line(line)
-        ]
-        return "\n".join(lines[:count]) or "Source document imported into KnowForge."
+        """Return the first `count` meaningful lines from the document.
+
+        Deliberately does NOT use keyword_summary() because frequency-based
+        scoring picks high-frequency fragments ('Company:', 'of the Company.')
+        instead of the coherent opening sentences that actually describe the doc.
+        For contracts, agreements, and most documents the first sentences
+        (parties, date, purpose) are the best natural summary.
+        """
+        lines = []
+        for line in text.splitlines():
+            line = line.strip()
+            if SourceIngestor._is_summary_line(line):
+                lines.append(line)
+            if len(lines) >= count:
+                break
+        return "\n".join(lines) if lines else "Source document imported into KnowForge."
 
     @staticmethod
     def _is_summary_line(line: str) -> bool:
@@ -493,52 +590,3 @@ class SourceIngestor:
         if stripped.startswith(("Figure ", "Table ", "CIN:", "GSTIN:", "Tel:", "Sign")):
             return False
         return bool(any(char.isalpha() for char in stripped))
-
-    @staticmethod
-    def _document_specific_summary(text: str) -> str:
-        lines = SourceIngestor._meaningful_lines(text)
-        lowered = text.lower()
-        if "employment agreement" in lowered:
-            facts = SourceIngestor._find_lines(
-                lines,
-                [
-                    "This Employment Agreement",
-                    "effective from",
-                    "gross annual payment",
-                    "Senior Associate",
-                    "90 days written notice",
-                    "probation",
-                    "Governing Law",
-                ],
-            )
-            if facts:
-                return trim_to_chars(" ".join(facts[:5]), 900)
-        if "abstract" in lowered and ("arxiv" in lowered or "technical report" in lowered):
-            facts = SourceIngestor._find_lines(
-                lines,
-                [
-                    "Technical Report",
-                    "We present",
-                    "Abstract",
-                    "parameters",
-                    "training",
-                    "outperforms",
-                    "Conclusion",
-                ],
-            )
-            if facts:
-                return trim_to_chars(" ".join(facts[:6]), 900)
-        return ""
-
-    @staticmethod
-    def _find_lines(lines: list[str], needles: list[str]) -> list[str]:
-        found = []
-        lowered_needles = [needle.lower() for needle in needles]
-        for line in lines:
-            lowered = line.lower()
-            if (
-                any(needle in lowered for needle in lowered_needles)
-                and SourceIngestor._is_summary_line(line)
-            ):
-                found.append(line)
-        return found

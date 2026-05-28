@@ -43,6 +43,10 @@ class WikiPageUpsert(BaseModel):
     content: str
 
 
+class WikiPageRename(BaseModel):
+    title: str = Field(min_length=1, max_length=240)
+
+
 class WikiPageListItem(BaseModel):
     title: str
     slug: str

@@ -14,7 +14,7 @@ from app.llmwiki.prompts import (
     VERIFIER_PROMPT,
 )
 from app.llmwiki.storage import WikiStore
-from app.llmwiki.text import keyword_summary, tokenize, trim_to_chars
+from app.llmwiki.text import keyword_summary, safe_format, tokenize, trim_context_to_token_budget, trim_to_chars
 from app.schemas.llmwiki import (
     AgentTrace,
     ChatRequest,
@@ -32,6 +32,9 @@ class ChatService:
         self.indexer = WikiIndexer(store)
         self.harness = AIHarness(store, self.indexer, self.llm)
         self.history_compactor = ConversationCompactor(self.llm)
+
+    FALLBACK_MATCH_MIN_OVERLAP = 4
+    FALLBACK_MATCH_MIN_RATIO = 0.14
 
     async def answer(self, request: ChatRequest) -> ChatResponse:
         history = await self.history_compactor.compact(
@@ -84,6 +87,7 @@ class ChatService:
                 request.question,
                 history,
             )
+            answer = self._clean_answer_text(answer)
             trace.append(
                 AgentTrace(
                     agent="direct_assistant",
@@ -114,7 +118,22 @@ class ChatService:
                 )
             )
 
-        answer = await self._generate_answer(request.question, history, context)
+        answer, used_local_fallback = await self._generate_answer(
+            request.question,
+            history,
+            context,
+            route_confidence=decision.confidence,
+        )
+        answer = self._clean_answer_text(answer)
+        if used_local_fallback:
+            trace.append(
+                AgentTrace(
+                    agent="local_fallback",
+                    action="served_high_confidence_wiki_excerpt",
+                    confidence=max(0.0, min(1.0, decision.confidence)),
+                    notes="LLM unavailable; served deterministic wiki excerpts.",
+                )
+            )
         verified, verifier_note, verifier_confidence = await self._verify(
             request.question,
             context,
@@ -144,14 +163,35 @@ class ChatService:
             agent_trace=trace,
         )
 
-    async def _generate_answer(self, question: str, history: str, context: str) -> str:
-        prompt = ANSWER_PROMPT.format(question=question, history=history or "None", context=context)
+    async def _generate_answer(
+        self,
+        question: str,
+        history: str,
+        context: str,
+        *,
+        route_confidence: float,
+    ) -> tuple[str, bool]:
+        # Cap context to ~8000 tokens to stay within Groq's rate limits.
+        # Total request: 8000 (context) + 2048 (output) + ~600 (prompt+history) ≈ 10,648 tokens.
+        # This is safe for Groq paid tier; free-tier users will be rate limited per-minute.
+        safe_context = trim_context_to_token_budget(
+            context,
+            token_budget=8000,
+            reserve_for_prompt=600,
+            reserve_for_output=0,
+        )
+        prompt = safe_format(
+            ANSWER_PROMPT,
+            question=question,
+            history=history or "None",
+            context=safe_context,
+        )
         if self.llm.available:
             try:
-                return await self.llm.generate_text(prompt, temperature=0.2)
+                return await self.llm.generate_text(prompt, temperature=0.2), False
             except Exception:
                 pass
-        return self._local_answer(question, context)
+        return self._local_answer(question, context, route_confidence=route_confidence), True
 
     @staticmethod
     def _is_gratitude(question: str) -> bool:
@@ -176,7 +216,7 @@ class ChatService:
         question: str,
         history: str,
     ) -> tuple[str, bool, str | None]:
-        prompt = DIRECT_CHAT_PROMPT.format(question=question, history=history or "None")
+        prompt = safe_format(DIRECT_CHAT_PROMPT, question=question, history=history or "None")
         if not self.llm.available:
             return (
                 "I could not reach the language model right now. "
@@ -185,7 +225,8 @@ class ChatService:
                 "Groq API key is missing.",
             )
         try:
-            return await self.llm.generate_text(prompt, temperature=0.35), True, None
+            text = await self.llm.generate_text(prompt, temperature=0.35)
+            return self._clean_answer_text(text), True, None
         except Exception as exc:
             return (
                 "We currently have insufficient tokens. Please try again shortly.",
@@ -197,7 +238,8 @@ class ChatService:
         if self.llm.available:
             try:
                 payload = await self.llm.generate_json(
-                    PLANNER_PROMPT.format(
+                    safe_format(
+                        PLANNER_PROMPT,
                         question=question,
                         context=trim_to_chars(context, settings.wiki_context_char_budget),
                     )
@@ -211,7 +253,8 @@ class ChatService:
         if self.llm.available:
             try:
                 payload = await self.llm.generate_json(
-                    VERIFIER_PROMPT.format(
+                    safe_format(
+                        VERIFIER_PROMPT,
                         question=question,
                         context=trim_to_chars(context, settings.wiki_context_char_budget),
                         answer=trim_to_chars(answer, 5000),
@@ -228,6 +271,11 @@ class ChatService:
         return has_citation, "Local citation check.", 0.6 if has_citation else 0.3
 
     def _raw_fallback_context(self, question: str) -> tuple[str, list[str]]:
+        """Return a compact, token-budget-safe excerpt from raw sources.
+
+        Deliberately kept small — the wiki page should be the primary source.
+        This is only used for the fallback route when no wiki page exists yet.
+        """
         query_terms = set(tokenize(question))
         scored: list[tuple[int, str, str]] = []
         for source_id, text in self.store.iter_sources():
@@ -236,14 +284,15 @@ class ChatService:
                 scored.append((score, source_id, text))
         blocks = []
         ids = []
-        remaining = max(3000, settings.wiki_context_char_budget // 2)
-        for _, source_id, text in sorted(scored, reverse=True)[:3]:
-            summary = trim_to_chars(keyword_summary(text, max_sentences=8), remaining // 2)
+        # Conservative budget: at most 4000 chars total for fallback context
+        remaining = 4000
+        for _, source_id, text in sorted(scored, reverse=True)[:2]:
+            summary = trim_to_chars(keyword_summary(text, max_sentences=10), remaining // 2)
             block = f"[source:{source_id}]\n{summary}"
             blocks.append(block)
             ids.append(source_id)
             remaining -= len(block)
-            if remaining <= 1000:
+            if remaining <= 500:
                 break
         return "\n\n---\n\n".join(blocks), ids
 
@@ -260,16 +309,66 @@ class ChatService:
         return True
 
     @staticmethod
-    def _local_answer(question: str, context: str) -> str:
-        summary = keyword_summary(context, max_sentences=8)
-        if not summary:
-            return "I could not find enough supported context in the KnowForge wiki to answer that."
-        return (
-            f"Based on the current KnowForge wiki context, the relevant information is:\n\n"
-            f"{summary}\n\n"
-            "This answer is generated from available wiki/source excerpts only; "
-            "add more source material if you need a more complete answer."
+    def _local_answer(question: str, context: str, *, route_confidence: float) -> str:
+        """Fallback answer used when the LLM is unavailable or errored.
+
+        Instead of running keyword_summary (which produces fragment garbage like
+        'Company:', 'of the Company.'), this extracts whole paragraphs that
+        overlap with the question terms and presents them as direct excerpts.
+        """
+        generic_unavailable = (
+            "The AI model is temporarily unavailable. "
+            "Please try again in a moment."
         )
+        if not context.strip():
+            return generic_unavailable
+        query_terms = set(tokenize(question))
+        # Split into substantial paragraphs
+        paragraphs = [
+            p.strip()
+            for p in re.split(r"\n{2,}", context)
+            if len(p.strip()) > 80
+            and not p.strip().startswith(("---", "[wiki:", "[source:"))
+        ]
+        if not paragraphs:
+            return generic_unavailable
+        # Score each paragraph by keyword overlap with the question
+        scored: list[tuple[int, int, str]] = [
+            (len(query_terms & set(tokenize(p))), idx, p)
+            for idx, p in enumerate(paragraphs)
+        ]
+        top = sorted(scored, key=lambda x: (-x[0], x[1]))[:3]
+        relevant = [p for score, _, p in top if score > 0]
+        best_overlap = top[0][0] if top else 0
+        normalized = best_overlap / max(1, len(query_terms))
+        confidence_gate_passed = (
+            best_overlap >= ChatService.FALLBACK_MATCH_MIN_OVERLAP
+            and normalized >= ChatService.FALLBACK_MATCH_MIN_RATIO
+            and route_confidence >= 0.45
+        )
+        if relevant and confidence_gate_passed:
+            return (
+                "**Note: AI model temporarily unavailable. Showing relevant wiki excerpts:**\n\n"
+                + "\n\n".join(relevant[:3])
+            )
+        return generic_unavailable
+
+    @staticmethod
+    def _clean_answer_text(answer: str) -> str:
+        text = (answer or "").replace("\r\n", "\n").strip()
+        if not text:
+            return text
+        text = re.sub(r"[ \t]+\n", "\n", text)
+        text = re.sub(r"\n{3,}", "\n\n", text)
+        lines = [line.rstrip() for line in text.split("\n")]
+        cleaned_lines: list[str] = []
+        for line in lines:
+            stripped = line.strip()
+            if stripped in {"| --- |", "|---|", "---"}:
+                continue
+            cleaned_lines.append(line)
+        text = "\n".join(cleaned_lines).strip()
+        return text
 
     @staticmethod
     def _citations(answer: str, used_pages: list[str], fallback_ids: list[str]) -> list[Citation]:

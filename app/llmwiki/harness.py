@@ -7,7 +7,7 @@ from app.llmwiki.groq import GroqClient
 from app.llmwiki.indexer import PageCandidate, WikiIndexer
 from app.llmwiki.prompts import QUERY_REWRITE_PROMPT
 from app.llmwiki.storage import WikiStore
-from app.llmwiki.text import tokenize
+from app.llmwiki.text import safe_format, tokenize
 from app.schemas.llmwiki import AgentTrace, ChatRequest, RouteDecision
 
 
@@ -201,7 +201,7 @@ class AIHarness:
             return question, False
         try:
             payload = await self.llm.generate_json(
-                QUERY_REWRITE_PROMPT.format(question=question, history=history),
+                safe_format(QUERY_REWRITE_PROMPT, question=question, history=history),
                 temperature=0.05,
             )
             rewritten = str(payload.get("rewritten_question") or question).strip()

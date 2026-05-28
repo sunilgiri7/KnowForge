@@ -167,7 +167,7 @@ class WikiIndexer:
         remaining = char_budget
         for slug in slugs:
             page = self.store.read_page(slug, prefer_compact=True)
-            snippet = self._page_snippet(page, query_terms, max_chars=max(2500, remaining // 2))
+            snippet = self._page_snippet(page, query_terms, max_chars=max(6000, remaining // 2))
             block = (
                 f"[wiki:{page.meta.slug}] {page.meta.title}\n"
                 f"Summary: {page.meta.summary}\n{snippet}"
@@ -276,7 +276,8 @@ class WikiIndexer:
             score = len(query_terms & set(tokenize(paragraph)))
             scored.append((index, score, paragraph))
         ranked = sorted(scored, key=lambda item: item[1], reverse=True)
-        selected_indices = {index for index, score, _ in ranked[:10] if score > 0}
+        # Expanded from top-10 to top-15 for better coverage of long docs
+        selected_indices = {index for index, score, _ in ranked[:15] if score > 0}
         expanded_indices = set(selected_indices)
         for index in selected_indices:
             expanded_indices.update({index - 1, index, index + 1})
@@ -286,6 +287,8 @@ class WikiIndexer:
             if index in expanded_indices and paragraph
         ]
         if not selected:
-            selected = [keyword_summary(page.content, max_sentences=6)]
+            # No keyword overlap — return the full page content trimmed to budget
+            # (better than a 6-sentence summary that may miss structured data)
+            return trim_to_chars(page.content, max_chars)
         ordered = "\n\n".join(selected)
         return trim_to_chars(ordered, max_chars)

@@ -13,7 +13,10 @@ const API = {
 
 const AUTH_KEY = "knowforge.auth.v1";
 const ACTIVE_SESSION_KEY = "knowforge.session.v1";
+const SIDEBAR_LAYOUT_KEY = "knowforge.sidebar.v1";
 const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
+const SIDEBAR_DEFAULT_WIDTH = 340;
+const SIDEBAR_COLLAPSED_WIDTH = 72;
 const THINKING_STEPS = [
   "Understanding your question",
   "Rewriting vague references",
@@ -37,6 +40,13 @@ const state = {
   pendingMode: "message",
   sending: false,
   thinkingTimers: new Map(),
+  wikiPages: [],
+  openWikiMenuSlug: null,
+  editingWikiSlug: null,
+  editingWikiTitle: "",
+  sidebarCollapsed: false,
+  sidebarWidth: SIDEBAR_DEFAULT_WIDTH,
+  sidebarResizing: false,
 };
 
 const els = {
@@ -77,7 +87,75 @@ const els = {
   compactWikiBtn: document.querySelector("#compactWikiBtn"),
   logoutBtn: document.querySelector("#logoutBtn"),
   networkState: document.querySelector("#networkState"),
+  appShell: document.querySelector(".app-shell"),
+  sidebar: document.querySelector("#sidebar"),
+  sidebarCloseBtn: document.querySelector("#sidebarCloseBtn"),
+  sidebarOpenBtn: document.querySelector("#sidebarOpenBtn"),
+  sidebarResizer: document.querySelector("#sidebarResizer"),
+  sidebarLogoWrap: document.querySelector("#sidebarLogoWrap"),
 };
+
+function loadSidebarLayout() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(SIDEBAR_LAYOUT_KEY) || "{}");
+    if (typeof saved.collapsed === "boolean") state.sidebarCollapsed = saved.collapsed;
+    if (Number.isFinite(saved.width)) state.sidebarWidth = Math.max(SIDEBAR_DEFAULT_WIDTH, Number(saved.width));
+  } catch {
+    state.sidebarCollapsed = false;
+    state.sidebarWidth = SIDEBAR_DEFAULT_WIDTH;
+  }
+}
+
+function saveSidebarLayout() {
+  localStorage.setItem(
+    SIDEBAR_LAYOUT_KEY,
+    JSON.stringify({
+      collapsed: state.sidebarCollapsed,
+      width: state.sidebarWidth,
+    }),
+  );
+}
+
+function applySidebarLayout() {
+  const viewportMax = Math.floor(window.innerWidth * 0.5);
+  const clampedWidth = Math.max(SIDEBAR_DEFAULT_WIDTH, Math.min(state.sidebarWidth, viewportMax));
+  state.sidebarWidth = clampedWidth;
+  if (state.sidebarCollapsed) {
+    els.appShell.style.gridTemplateColumns = `${SIDEBAR_COLLAPSED_WIDTH}px minmax(0, 1fr)`;
+    els.sidebar.classList.add("collapsed");
+  } else {
+    els.appShell.style.gridTemplateColumns = `${clampedWidth}px minmax(0, 1fr)`;
+    els.sidebar.classList.remove("collapsed");
+  }
+}
+
+function setSidebarCollapsed(collapsed) {
+  state.sidebarCollapsed = !!collapsed;
+  applySidebarLayout();
+  saveSidebarLayout();
+}
+
+function startSidebarResize(event) {
+  if (state.sidebarCollapsed) return;
+  event.preventDefault();
+  state.sidebarResizing = true;
+  document.body.classList.add("resizing-sidebar");
+  const onMove = (moveEvent) => {
+    if (!state.sidebarResizing) return;
+    const max = Math.floor(window.innerWidth * 0.5);
+    state.sidebarWidth = Math.max(SIDEBAR_DEFAULT_WIDTH, Math.min(moveEvent.clientX, max));
+    applySidebarLayout();
+  };
+  const onUp = () => {
+    state.sidebarResizing = false;
+    document.body.classList.remove("resizing-sidebar");
+    window.removeEventListener("mousemove", onMove);
+    window.removeEventListener("mouseup", onUp);
+    saveSidebarLayout();
+  };
+  window.addEventListener("mousemove", onMove);
+  window.addEventListener("mouseup", onUp);
+}
 
 function uid() {
   return crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
@@ -142,42 +220,59 @@ function escapeHtml(value) {
 }
 
 function renderMarkdown(markdown) {
-  const codeBlocks = [];
-  let html = escapeHtml(markdown || "");
-  html = html.replace(/```([\s\S]*?)```/g, (_, code) => {
-    const index = codeBlocks.push(`<pre><code>${code.trim()}</code></pre>`) - 1;
-    return `@@CODE_BLOCK_${index}@@`;
-  });
-  html = html
+  const source = (markdown || "").replace(/\r\n/g, "\n");
+  const blocks = source.split(/\n{2,}/).map((part) => part.trim()).filter(Boolean);
+  const rendered = blocks.map(renderMarkdownBlock).join("");
+  return rendered || `<p>${escapeHtml(source)}</p>`;
+}
+
+function renderInlineMarkdown(value) {
+  return escapeHtml(value || "")
     .replace(/`([^`]+)`/g, "<code>$1</code>")
     .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
     .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>')
     .replace(/\[(wiki|source):([^\]]+)\]/g, '<span class="message-chip">$1:$2</span>');
+}
 
-  const paragraphs = html
-    .split(/\n{2,}/)
-    .map((part) => {
-      if (part.startsWith("@@CODE_BLOCK_")) return part;
-      const withBreaks = part.replace(/\n/g, "<br />");
-      if (/^#{1,3}\s/.test(withBreaks)) {
-        return `<p><strong>${withBreaks.replace(/^#{1,3}\s/, "")}</strong></p>`;
-      }
-      if (/^[-*]\s/m.test(withBreaks)) {
-        const items = withBreaks
-          .split("<br />")
-          .filter(Boolean)
-          .map((line) => `<li>${line.replace(/^[-*]\s/, "")}</li>`)
-          .join("");
-        return `<ul>${items}</ul>`;
-      }
-      return `<p>${withBreaks}</p>`;
-    })
+function renderMarkdownBlock(block) {
+  if (block.startsWith("```") && block.endsWith("```")) {
+    const code = block.slice(3, -3).trim();
+    return `<pre><code>${escapeHtml(code)}</code></pre>`;
+  }
+  const lines = block.split("\n");
+  if (lines.every((line) => /^[-*]\s+/.test(line.trim()))) {
+    const items = lines.map((line) => `<li>${renderInlineMarkdown(line.trim().replace(/^[-*]\s+/, ""))}</li>`).join("");
+    return `<ul>${items}</ul>`;
+  }
+  if (
+    lines.length >= 2 &&
+    lines[0].includes("|") &&
+    /^\s*\|?[\s:-]+\|[\s|:-]*$/.test(lines[1])
+  ) {
+    return renderMarkdownTable(lines);
+  }
+  if (/^#{1,3}\s+/.test(lines[0])) {
+    const text = lines[0].replace(/^#{1,3}\s+/, "");
+    return `<p><strong>${renderInlineMarkdown(text)}</strong></p>`;
+  }
+  return `<p>${lines.map((line) => renderInlineMarkdown(line)).join("<br />")}</p>`;
+}
+
+function renderMarkdownTable(lines) {
+  if (lines.length < 2) return `<p>${renderInlineMarkdown(lines.join("\n"))}</p>`;
+  const rows = lines
+    .filter((line, index) => index !== 1)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => line.replace(/^\||\|$/g, "").split("|").map((cell) => cell.trim()));
+  if (!rows.length) return "";
+  const header = rows[0];
+  const bodyRows = rows.slice(1);
+  const headHtml = `<tr>${header.map((cell) => `<th>${renderInlineMarkdown(cell)}</th>`).join("")}</tr>`;
+  const bodyHtml = bodyRows
+    .map((row) => `<tr>${row.map((cell) => `<td>${renderInlineMarkdown(cell)}</td>`).join("")}</tr>`)
     .join("");
-
-  return codeBlocks.reduce(
-    (result, block, index) => result.replace(`@@CODE_BLOCK_${index}@@`, block),
-    paragraphs,
-  );
+  return `<div class="table-wrap"><table><thead>${headHtml}</thead><tbody>${bodyHtml}</tbody></table></div>`;
 }
 
 function toast(message, type = "info") {
@@ -577,7 +672,6 @@ function renderSessionList() {
       }, 0);
     } else {
       item.querySelector(".session-menu-btn").addEventListener("click", (event) => {
-        console.log("session menu button clicked", session.id);
         event.stopPropagation();
         toggleSessionMenu(session.id);
       });
@@ -596,9 +690,7 @@ function renderSessionList() {
 }
 
 function toggleSessionMenu(sessionId) {
-  console.log("toggleSessionMenu before", sessionId, state.openSessionMenuId);
   state.openSessionMenuId = state.openSessionMenuId === sessionId ? null : sessionId;
-  console.log("toggleSessionMenu after", state.openSessionMenuId);
   renderSessionList();
 }
 
@@ -666,6 +758,77 @@ function confirmDeleteSession(sessionId) {
   });
 }
 
+function prefillWikiPrompt(page) {
+  const prompt = `Summarize the wiki page "${page.slug}" and explain what it is useful for.`;
+  els.messageInput.value = prompt;
+  resizeTextarea();
+  els.messageInput.focus();
+  state.openWikiMenuSlug = null;
+  renderWikiPages();
+}
+
+function toggleWikiMenu(slug) {
+  state.openWikiMenuSlug = state.openWikiMenuSlug === slug ? null : slug;
+  renderWikiPages();
+}
+
+function startWikiRename(slug, currentTitle) {
+  state.editingWikiSlug = slug;
+  state.editingWikiTitle = currentTitle;
+  state.openWikiMenuSlug = null;
+  renderWikiPages();
+}
+
+function cancelWikiRename() {
+  state.editingWikiSlug = null;
+  state.editingWikiTitle = "";
+  renderWikiPages();
+}
+
+async function applyWikiRename(slug) {
+  const title = state.editingWikiTitle.trim();
+  if (!title) {
+    toast("Wiki page title cannot be empty.", "error");
+    return;
+  }
+  try {
+    await apiFetch(`${API.wikiPages}/${slug}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title }),
+    });
+    toast("Wiki page renamed.");
+    state.editingWikiSlug = null;
+    state.editingWikiTitle = "";
+    await loadWikiPages();
+  } catch (error) {
+    toast(error.message, "error");
+  }
+}
+
+function confirmDeleteWikiPage(slug) {
+  state.openWikiMenuSlug = null;
+  renderWikiPages();
+  showDialog({
+    title: "Delete wiki page?",
+    message: "This will permanently remove the selected wiki page.",
+    confirmText: "Delete",
+    cancelText: "Cancel",
+    onConfirm: async () => {
+      try {
+        await apiFetch(`${API.wikiPages}/${slug}`, { method: "DELETE" });
+        toast("Wiki page deleted.");
+        state.editingWikiSlug = null;
+        state.editingWikiTitle = "";
+        state.openWikiMenuSlug = null;
+        await loadWikiPages();
+      } catch (error) {
+        toast(error.message, "error");
+      }
+    },
+  });
+}
+
 function showDialog({ title, message, confirmText, cancelText, onConfirm }) {
   const overlay = document.createElement("div");
   overlay.className = "dialog-overlay";
@@ -714,27 +877,94 @@ async function loadSession(sessionId, options = {}) {
 async function loadWikiPages() {
   try {
     const pages = await apiFetch(API.wikiPages);
-    els.wikiList.innerHTML = "";
-    els.emptyWiki.hidden = pages.length > 0;
-    for (const page of pages) {
-      const item = document.createElement("button");
-      item.type = "button";
-      item.className = "wiki-item";
-      item.innerHTML = `
-        <strong>${escapeHtml(page.title)}</strong>
-        <span>${escapeHtml(page.summary || page.slug)}</span>
-      `;
-      item.addEventListener("click", () =>
-        sendMessage(`Summarize the wiki page "${page.slug}" and explain what it is useful for.`, {
-          intent: "wiki",
-          contextPageSlugs: [page.slug],
-        }),
-      );
-      els.wikiList.appendChild(item);
+    state.wikiPages = pages;
+    if (!state.wikiPages.some((page) => page.slug === state.editingWikiSlug)) {
+      state.editingWikiSlug = null;
+      state.editingWikiTitle = "";
     }
+    if (!state.wikiPages.some((page) => page.slug === state.openWikiMenuSlug)) {
+      state.openWikiMenuSlug = null;
+    }
+    renderWikiPages();
   } catch (error) {
+    state.wikiPages = [];
+    renderWikiPages();
     els.emptyWiki.hidden = false;
     els.emptyWiki.textContent = error.message;
+  }
+}
+
+function renderWikiPages() {
+  els.wikiList.innerHTML = "";
+  els.emptyWiki.hidden = state.wikiPages.length > 0;
+  for (const page of state.wikiPages) {
+    const item = document.createElement("div");
+    const isEditing = state.editingWikiSlug === page.slug;
+    item.className = `session-item wiki-page-item ${isEditing ? "editing" : ""}`;
+    item.innerHTML = isEditing
+      ? `
+        <div class="wiki-item session-row editing">
+          <div class="session-details">
+            <input class="session-title-input wiki-title-input" value="${escapeHtml(state.editingWikiTitle)}" />
+            <span>${escapeHtml(page.summary || page.slug)}</span>
+            <div class="edit-controls">
+              <button type="button" class="icon-button wiki-action confirm" title="Save title">✓</button>
+              <button type="button" class="icon-button wiki-action cancel" title="Cancel">✕</button>
+            </div>
+          </div>
+          <div class="session-actions"></div>
+        </div>
+      `
+      : `
+        <div class="wiki-item session-row wiki-card-row">
+          <div class="session-details">
+            <strong class="session-title">${escapeHtml(page.title)}</strong>
+            <span>${escapeHtml(page.summary || page.slug)}</span>
+          </div>
+          <div class="session-actions">
+            <button type="button" class="icon-button wiki-menu-btn" title="Wiki page actions">⋮</button>
+          </div>
+        </div>
+        <div class="session-menu ${state.openWikiMenuSlug === page.slug ? "visible" : ""}">
+          <button type="button" class="session-action edit">Rename</button>
+          <button type="button" class="session-action delete">Delete</button>
+        </div>
+      `;
+
+    if (isEditing) {
+      const input = item.querySelector(".wiki-title-input");
+      input.addEventListener("input", (event) => {
+        state.editingWikiTitle = event.target.value;
+      });
+      input.addEventListener("keydown", (event) => {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          applyWikiRename(page.slug);
+        }
+        if (event.key === "Escape") cancelWikiRename();
+      });
+      item.querySelector(".wiki-action.confirm").addEventListener("click", () => applyWikiRename(page.slug));
+      item.querySelector(".wiki-action.cancel").addEventListener("click", cancelWikiRename);
+      setTimeout(() => {
+        input?.focus();
+        try { input?.select(); } catch (e) {}
+      }, 0);
+    } else {
+      item.querySelector(".wiki-card-row").addEventListener("click", () => prefillWikiPrompt(page));
+      item.querySelector(".wiki-menu-btn").addEventListener("click", (event) => {
+        event.stopPropagation();
+        toggleWikiMenu(page.slug);
+      });
+      item.querySelector(".session-action.edit").addEventListener("click", (event) => {
+        event.stopPropagation();
+        startWikiRename(page.slug, page.title);
+      });
+      item.querySelector(".session-action.delete").addEventListener("click", (event) => {
+        event.stopPropagation();
+        confirmDeleteWikiPage(page.slug);
+      });
+    }
+    els.wikiList.appendChild(item);
   }
 }
 
@@ -783,6 +1013,23 @@ function logout(showToast = true) {
 }
 
 function bindEvents() {
+  els.sidebarCloseBtn.addEventListener("click", (event) => {
+    event.stopPropagation();
+    setSidebarCollapsed(true);
+  });
+  els.sidebarOpenBtn.addEventListener("click", (event) => {
+    event.stopPropagation();
+    setSidebarCollapsed(false);
+  });
+  els.sidebarLogoWrap.addEventListener("click", () => {
+    if (state.sidebarCollapsed) setSidebarCollapsed(false);
+  });
+  els.sidebarResizer.addEventListener("mousedown", startSidebarResize);
+  window.addEventListener("resize", () => {
+    applySidebarLayout();
+    saveSidebarLayout();
+  });
+
   els.showLoginBtn.addEventListener("click", () => setAuthMode("login"));
   els.showRegisterBtn.addEventListener("click", () => setAuthMode("register"));
 
@@ -924,10 +1171,18 @@ function bindEvents() {
   }
   els.dropZone.addEventListener("drop", (event) => uploadPdf(event.dataTransfer.files?.[0]));
   window.addEventListener("click", () => {
+    let rerenderSessions = false;
+    let rerenderWiki = false;
     if (state.openSessionMenuId) {
       state.openSessionMenuId = null;
-      renderSessionList();
+      rerenderSessions = true;
     }
+    if (state.openWikiMenuSlug) {
+      state.openWikiMenuSlug = null;
+      rerenderWiki = true;
+    }
+    if (rerenderSessions) renderSessionList();
+    if (rerenderWiki) renderWikiPages();
   });
 }
 
@@ -936,6 +1191,8 @@ function resizeTextarea() {
   els.messageInput.style.height = `${Math.min(180, els.messageInput.scrollHeight)}px`;
 }
 
+loadSidebarLayout();
+applySidebarLayout();
 bindEvents();
 showApp(false);
 bootstrapAuth();

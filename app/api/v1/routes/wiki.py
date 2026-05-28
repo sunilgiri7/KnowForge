@@ -6,7 +6,7 @@ from app.api.deps import get_current_user, wiki_store_for_user
 from app.db.models import User
 from app.llmwiki.compaction import WikiCompactor
 from app.llmwiki.text import slugify
-from app.schemas.llmwiki import WikiPage, WikiPageListItem, WikiPageUpsert
+from app.schemas.llmwiki import WikiPage, WikiPageListItem, WikiPageRename, WikiPageUpsert
 
 router = APIRouter(prefix="/wiki", tags=["wiki"])
 
@@ -44,6 +44,21 @@ async def upsert_page(
         confidence="high",
     )
     return store.upsert_page(page)
+
+
+@router.patch("/pages/{slug:path}", response_model=WikiPage)
+async def rename_page(
+    slug: str,
+    payload: WikiPageRename,
+    user: Annotated[User, Depends(get_current_user)],
+) -> WikiPage:
+    return wiki_store_for_user(user).rename_page(slug, payload.title)
+
+
+@router.delete("/pages/{slug:path}", response_model=dict[str, bool])
+async def delete_page(slug: str, user: Annotated[User, Depends(get_current_user)]) -> dict[str, bool]:
+    wiki_store_for_user(user).delete_page(slug)
+    return {"deleted": True}
 
 
 @router.post("/compact", response_model=dict[str, int])

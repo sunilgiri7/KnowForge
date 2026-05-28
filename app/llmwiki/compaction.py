@@ -3,7 +3,7 @@ from app.llmwiki.groq import GroqClient
 from app.llmwiki.markdown import render_page
 from app.llmwiki.prompts import COMPACT_PROMPT
 from app.llmwiki.storage import WikiStore
-from app.llmwiki.text import keyword_summary, trim_to_chars
+from app.llmwiki.text import keyword_summary, safe_format, trim_to_chars
 from app.schemas.llmwiki import WikiPage
 
 
@@ -26,8 +26,9 @@ class WikiCompactor:
         if self.llm.available:
             try:
                 content = await self.llm.generate_text(
-                    COMPACT_PROMPT.format(
-                        page=trim_to_chars(raw, settings.wiki_context_char_budget)
+                    safe_format(
+                        COMPACT_PROMPT,
+                        page=trim_to_chars(raw, settings.wiki_context_char_budget),
                     ),
                     temperature=0.1,
                 )

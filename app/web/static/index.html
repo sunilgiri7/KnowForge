@@ -52,15 +52,17 @@
     </section>
 
     <div class="app-shell">
-      <aside class="sidebar" aria-label="Workspace">
+      <aside class="sidebar" id="sidebar" aria-label="Workspace">
         <div class="brand-block">
-          <div class="brand-mark">
+          <div class="brand-mark" id="sidebarLogoWrap">
             <img src="/static/favicon.svg" alt="KnowForge icon" />
           </div>
-          <div>
+          <div class="brand-copy">
             <h1>KnowForge</h1>
             <p>LLMWiki assistant</p>
           </div>
+          <button id="sidebarCloseBtn" class="icon-button sidebar-toggle" type="button" title="Collapse sidebar" aria-label="Collapse sidebar"></button>
+          <button id="sidebarOpenBtn" class="icon-button sidebar-open-btn" type="button" title="Expand sidebar" aria-label="Expand sidebar"></button>
         </div>
 
         <section class="panel">
@@ -100,6 +102,7 @@
           <div id="sessionList" class="wiki-list"></div>
           <div id="emptySessions" class="empty-mini">No saved chats yet.</div>
         </section>
+        <div id="sidebarResizer" class="sidebar-resizer" role="separator" aria-label="Resize sidebar" aria-orientation="vertical"></div>
       </aside>
 
       <main class="chat-area">
