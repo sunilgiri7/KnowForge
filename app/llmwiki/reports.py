@@ -426,3 +426,152 @@ class ReportRunner:
 
 class ReportGenerationError(RuntimeError):
     pass
+
+
+async def generate_report_from_chat(
+    db: Session,
+    user: Any,
+    workspace: Any,
+    request: Any,
+) -> Any:
+    from app.services.llm_factory import build_user_llm
+    from app.api.deps import wiki_store_for_workspace
+    from app.llmwiki.prompts import ANALYZE_CHAT_REPORT_PROMPT
+    from app.schemas.llmwiki import ChatResponse, AgentTrace
+    import json
+    import uuid
+
+    llm = build_user_llm(db, user)
+    if not llm or not llm.available:
+        from app.llmwiki.groq import GroqClient
+        llm = GroqClient()
+
+    if not llm or not llm.available:
+        return ChatResponse(
+            session_id=request.session_id,
+            answer="I am sorry, but neither your personal LLM provider nor the system LLM provider is configured. Please configure an LLM provider to continue.",
+            route="direct",
+            difficulty="easy",
+        )
+
+    store = wiki_store_for_workspace(workspace)
+    pages = store.list_pages()
+    if not pages:
+        return ChatResponse(
+            session_id=request.session_id,
+            answer="I am sorry, there are no wiki pages in this workspace to generate a report from. Please upload a PDF or create a wiki page first.",
+            route="direct",
+            difficulty="easy",
+        )
+
+    wiki_pages_list = "\n".join(
+        f"- slug: {p.slug}, title: {p.title}, summary: {p.summary}"
+        for p in pages
+    )
+    prompt = safe_format(
+        ANALYZE_CHAT_REPORT_PROMPT,
+        wiki_pages_list=wiki_pages_list,
+        question=request.question,
+    )
+
+    try:
+        analysis = await llm.generate_json(prompt, temperature=0.1)
+    except Exception as exc:
+        print(f"[Error] generate_report_from_chat analysis failed: {exc}")
+        return ChatResponse(
+            session_id=request.session_id,
+            answer="I'm sorry, but I am currently unable to process your report request. Please try again shortly.",
+            route="direct",
+            difficulty="easy",
+        )
+
+    # Validate output
+    name = (analysis.get("name") or "").strip()
+    if not name:
+        name = f"Chat Report - {datetime.now(UTC).strftime('%Y-%m-%d %H:%M')}"
+    
+    desc = (analysis.get("description") or "").strip()
+    if not desc:
+        desc = f"Generated dynamically from chat request: '{request.question}'"
+
+    fmt = (analysis.get("export_format") or "xlsx").strip().lower()
+    if fmt not in {"pdf", "xlsx", "docx"}:
+        fmt = "xlsx"
+
+    cols = analysis.get("columns") or []
+    if not cols:
+        cols = [{"key": "summary", "label": "Summary", "instruction": "Provide a brief summary of this page."}]
+    
+    sections = analysis.get("sections") or []
+
+    scope_slugs = analysis.get("scope_slugs") or []
+    if not scope_slugs:
+        scope_slugs = [p.slug for p in pages]
+
+    # Create the template
+    template = ReportTemplate(
+        id=str(uuid.uuid4()),
+        workspace_id=workspace.id,
+        name=name,
+        description=desc,
+        columns_json=json.dumps(cols),
+        sections_json=json.dumps(sections),
+        scope_slugs_json=json.dumps(scope_slugs),
+        created_by=user.id,
+    )
+    db.add(template)
+    db.commit()
+    db.refresh(template)
+
+    # Create the job
+    job = ReportJob(
+        id=str(uuid.uuid4()),
+        workspace_id=workspace.id,
+        template_id=template.id,
+        export_format=fmt,
+        created_by=user.id,
+        scope_slugs_json=template.scope_slugs_json,
+        status="pending",
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+
+    # Run the report job
+    runner = ReportRunner(db, store, llm)
+    try:
+        await runner.run(job)
+    except Exception as exc:
+        job.status = "failed"
+        job.error_message = str(exc)
+        db.commit()
+
+    if job.status == "done":
+        used_slugs_str = ", ".join(f"`{slug}`" for slug in scope_slugs)
+        ans = (
+            f"I have successfully generated the report **{template.name}**.\n\n"
+            f"📁 **File Details**:\n"
+            f"- **Format**: {fmt.upper()}\n"
+            f"- **Scope**: {used_slugs_str}\n\n"
+            f"📥 **Download Link**:\n"
+            f"[Click here to download your report](/api/v1/reports/{job.id}/download?format={fmt})\n\n"
+            f"You can also manage this template and view all past generation jobs in the **📊 Report Generator** modal by clicking the report icon at the bottom of the sidebar."
+        )
+    else:
+        ans = "I'm sorry, but I am currently unable to process your report request. Please try again shortly."
+
+    return ChatResponse(
+        session_id=request.session_id,
+        answer=ans,
+        route="wiki",
+        difficulty="hard",
+        citations=[],
+        used_pages=scope_slugs,
+        knowledge_gap_created=(job.status != "done"),
+        agent_trace=[AgentTrace(
+            agent="chat_report_generator",
+            action="generate_report",
+            confidence=1.0,
+            notes=f"Created template '{template.name}' and job {job.id}."
+        )]
+    )

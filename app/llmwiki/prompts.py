@@ -466,3 +466,40 @@ Return Markdown only.
 PAGE:
 {page}
 """
+
+ANALYZE_CHAT_REPORT_PROMPT = """You are KnowForge's report analysis agent.
+
+Your job is to analyze the user's chat query and determine how to generate a structured report.
+You must return a JSON object with:
+1. `name`: A short, descriptive name for the report (e.g. "Q3 Procurement Review").
+2. `description`: A brief description of the report's scope and intent.
+3. `export_format`: One of "xlsx", "pdf", "docx". Extract the format requested by the user. If they didn't specify, choose the most appropriate format for the data (e.g., "xlsx" for numeric/structured tables, "pdf" for formal documents, "docx" for text reports).
+4. `columns`: A list of columns to extract from wiki pages. Each column has:
+   - `key`: A unique, clean string key (e.g. "vendor", "contract_value", "deadline")
+   - `label`: A clear human-readable column header (e.g. "Vendor Name", "Contract Value", "Deadline")
+   - `instruction`: A precise extraction prompt instructing the AI what information to pull (e.g. "Extract the exact vendor name mentioned on the page")
+5. `sections`: A list of section structures (mainly for PDF/DOCX). Each section has:
+   - `heading`: Section title (e.g. "Key Summary", "Detailed Findings")
+   - `instruction`: Precision instruction on what content/summary to extract for this section
+6. `scope_slugs`: List of wiki page slugs that are relevant to this report query. YOU MUST choose ONLY from the list of available pages provided below. If no pages are relevant, return an empty list `[]`.
+
+Available Wiki Pages:
+{wiki_pages_list}
+
+User Query:
+{question}
+
+Return JSON only:
+{{
+  "name": "...",
+  "description": "...",
+  "export_format": "xlsx" | "pdf" | "docx",
+  "columns": [
+    {{"key": "...", "label": "...", "instruction": "..."}}
+  ],
+  "sections": [
+    {{"heading": "...", "instruction": "..."}}
+  ],
+  "scope_slugs": ["slug1", "slug2"]
+}}
+"""

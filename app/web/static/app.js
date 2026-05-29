@@ -54,6 +54,7 @@ const state = {
   sidebarWidth: SIDEBAR_DEFAULT_WIDTH,
   sidebarResizing: false,
   llmProviderTouched: false,
+  reportModeActive: false,
 };
 
 const els = {
@@ -76,6 +77,7 @@ const els = {
   chatForm: document.querySelector("#chatForm"),
   messageInput: document.querySelector("#messageInput"),
   sendBtn: document.querySelector("#sendBtn"),
+  chatReportModeBtn: document.querySelector("#chatReportModeBtn"),
   template: document.querySelector("#messageTemplate"),
   replyBanner: document.querySelector("#replyBanner"),
   replyLabel: document.querySelector("#replyLabel"),
@@ -632,6 +634,12 @@ async function sendMessage(content, options = {}) {
   renderChat();
   startThinking(assistantId);
 
+  const generateReport = !!state.reportModeActive;
+  if (state.reportModeActive) {
+    state.reportModeActive = false;
+    updateReportModeUI();
+  }
+
   const contextPageSlugs = options.contextPageSlugs?.length
     ? options.contextPageSlugs
     : state.pendingWikiContextSlug
@@ -655,6 +663,7 @@ async function sendMessage(content, options = {}) {
         context_page_slugs: contextPageSlugs,
         intent: wikiIntent,
         allow_fallback: true,
+        generate_report: generateReport,
       }),
     });
     state.currentSessionId = response.session_id || state.currentSessionId;
@@ -761,6 +770,23 @@ function renderMessageNode(message, children, depth) {
   node.querySelector(".message-body").innerHTML = message.pending
     ? renderThinking(message.thinkingStep || 0)
     : renderMarkdown(message.content);
+
+  node.querySelectorAll(".message-body a").forEach(link => {
+    const href = link.getAttribute("href");
+    if (href && href.includes("/reports/") && href.includes("/download")) {
+      link.addEventListener("click", (e) => {
+        e.preventDefault();
+        const match = href.match(/\/reports\/([^/]+)\/download/);
+        if (match) {
+          const jobId = match[1];
+          const urlParams = new URLSearchParams(href.split("?")[1] || "");
+          const format = urlParams.get("format") || "xlsx";
+          downloadReportFile(jobId, format);
+        }
+      });
+    }
+  });
+
   node.querySelector(".copy-btn").addEventListener("click", () => {
     navigator.clipboard?.writeText(message.content);
     toast("Message copied.");
@@ -1576,6 +1602,11 @@ function bindEvents() {
     await sendMessage(content);
   });
 
+  els.chatReportModeBtn?.addEventListener("click", () => {
+    state.reportModeActive = !state.reportModeActive;
+    updateReportModeUI();
+  });
+
   els.messageInput.addEventListener("keydown", (event) => {
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
@@ -1749,6 +1780,16 @@ function bindEvents() {
 function resizeTextarea() {
   els.messageInput.style.height = "auto";
   els.messageInput.style.height = `${Math.min(180, els.messageInput.scrollHeight)}px`;
+}
+
+function updateReportModeUI() {
+  if (state.reportModeActive) {
+    els.chatReportModeBtn?.classList.add("active");
+    els.messageInput.placeholder = "Describe the report you want to generate (e.g. 'Summarize procurement policies in PDF')...";
+  } else {
+    els.chatReportModeBtn?.classList.remove("active");
+    els.messageInput.placeholder = "Ask KnowForge, reply to a message, or continue a thread...";
+  }
 }
 
 loadSidebarLayout();

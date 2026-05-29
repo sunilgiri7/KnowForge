@@ -79,7 +79,11 @@ def _get_user_llm_client(db: Session, user_id: str):
     user = db.get(User, user_id)
     if not user:
         return None
-    return build_user_llm(db, user)
+    llm = build_user_llm(db, user)
+    if not llm or not llm.available:
+        from app.llmwiki.groq import GroqClient
+        llm = GroqClient()
+    return llm
 
 
 async def _run_job_in_background(

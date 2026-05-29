@@ -120,6 +120,7 @@ class ChatRequest(BaseModel):
     interaction: Literal["message", "reply", "comment"] = "message"
     context_page_slugs: list[str] = Field(default_factory=list, max_length=8)
     intent: Literal["auto", "wiki", "direct"] = "auto"
+    generate_report: bool = False
 
 
 class AgentTrace(BaseModel):

@@ -57,7 +57,11 @@ async def chat(
         interaction=request.interaction,
     )
     user_llm = build_user_llm(db, user)
-    response = await ChatService(wiki_store_for_workspace(workspace), llm=user_llm).answer(request)
+    if request.generate_report:
+        from app.llmwiki.reports import generate_report_from_chat
+        response = await generate_report_from_chat(db, user, workspace, request)
+    else:
+        response = await ChatService(wiki_store_for_workspace(workspace), llm=user_llm).answer(request)
     add_message(
         db,
         user=user,
