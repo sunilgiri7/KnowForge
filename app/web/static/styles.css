@@ -133,7 +133,7 @@ button {
   flex-direction: column;
   gap: 16px;
   min-height: 0;
-  overflow: hidden;
+  overflow-y: auto; /* Fallback scrollbar for sidebar itself on very small viewports */
   padding: 18px;
   border-right: 1px solid var(--line);
   background: #fbfcfc;
@@ -301,8 +301,8 @@ button {
 .wiki-panel {
   display: flex;
   flex-direction: column;
-  min-height: 200px;
-  max-height: 34vh;
+  min-height: 120px;
+  flex: 1 1 0%; /* Share remaining height equally (50/50) */
   overflow: hidden;
 }
 
@@ -453,12 +453,10 @@ body.modal-open {
 }
 
 .session-panel {
-  /* display: grid; */
+  display: flex;
   flex-direction: column;
-  min-height: 200px;
-  flex: 1 1 auto;
-  min-height: 0;
-  max-height: 38vh;
+  min-height: 120px;
+  flex: 1 1 0%; /* Share remaining height equally (50/50) */
   overflow: hidden;
 }
 

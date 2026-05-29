@@ -491,8 +491,11 @@ async function apiFetch(url, options = {}) {
     els.networkState.textContent = "Connected to local API";
     return body;
   } catch (error) {
-    els.networkState.textContent =
-      error.name === "AbortError" ? "Request timed out" : "API connection issue";
+    if (error.name === "AbortError") {
+      els.networkState.textContent = "Request timed out";
+      throw new Error("Request timed out. The AI model or system took too long to respond. Please try again.");
+    }
+    els.networkState.textContent = "API connection issue";
     throw error;
   } finally {
     clearTimeout(timeout);
@@ -621,6 +624,7 @@ async function sendMessage(content, options = {}) {
     const response = await apiFetch(API.chat, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
+      timeout: 300000, // 5 minutes to allow complex multi-LLM routing, planning, and verification
       body: JSON.stringify({
         question: content,
         session_id: state.currentSessionId,
