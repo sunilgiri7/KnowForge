@@ -7,10 +7,14 @@
     <!-- Favicon: SVG preferred for crisp rendering -->
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
     <link rel="shortcut icon" href="/static/favicon.svg">
+    <!-- Google Fonts for sleek Claude-like modern typography -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700&family=Newsreader:ital,opsz,wght@0,6..72,300..700;1,6..72,300..700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/static/styles.css" />
   </head>
   <body>
-    <section id="authScreen" class="auth-screen">
+    <section id="authScreen" class="auth-screen" hidden>
       <div class="auth-card">
         <div class="brand-block">
           <div class="brand-mark">
@@ -51,94 +55,148 @@
       </div>
     </section>
 
-    <div class="app-shell">
+    <div class="app-shell" hidden>
       <aside class="sidebar" id="sidebar" aria-label="Workspace">
         <div class="brand-block">
           <div class="brand-mark" id="sidebarLogoWrap">
             <img src="/static/favicon.svg" alt="KnowForge icon" />
+            <button id="sidebarOpenBtn" class="icon-button sidebar-open-btn" type="button" title="Expand sidebar" aria-label="Expand sidebar"></button>
           </div>
           <div class="brand-copy">
             <h1>KnowForge</h1>
             <p>LLMWiki assistant</p>
           </div>
           <button id="sidebarCloseBtn" class="icon-button sidebar-toggle" type="button" title="Collapse sidebar" aria-label="Collapse sidebar"></button>
-          <button id="sidebarOpenBtn" class="icon-button sidebar-open-btn" type="button" title="Expand sidebar" aria-label="Expand sidebar"></button>
         </div>
 
-        <section class="panel">
-          <div class="panel-heading">
-            <h2>Sources</h2>
-            <span id="uploadState" class="status-pill">Ready</span>
+        <!-- Sleek Workspace Switcher inside the Sidebar -->
+        <div class="workspace-selector-container">
+          <div class="workspace-switcher" id="workspaceSwitcher" title="Switch workspace">
+            <span class="ws-icon">⬡</span>
+            <span id="activeWorkspaceName">Personal</span>
+            <span class="ws-caret">▾</span>
+            <div id="workspaceDropdown" class="ws-dropdown" hidden>
+              <div id="workspaceList" class="ws-list"></div>
+              <div class="ws-divider"></div>
+              <button id="newWorkspaceBtn" class="ws-action-btn" type="button">+ New Workspace</button>
+            </div>
           </div>
-          <label class="upload-zone" for="pdfInput" id="dropZone">
-            <span class="upload-icon">+</span>
-            <span>
-              <strong>Upload PDF</strong>
-              <small>Upload PDFs and KnowForge will build wiki pages automatically.</small>
-            </span>
-          </label>
-          <input id="pdfInput" type="file" accept="application/pdf" hidden />
-          <div id="uploadError" class="inline-error" hidden></div>
-        </section>
+        </div>
 
-        <section class="panel wiki-panel">
-          <div class="panel-heading">
-            <h2>Wiki Pages</h2>
-            <button id="refreshWikiBtn" class="icon-button" type="button" title="Refresh wiki">
-              <span>↻</span>
+        <!-- Modern segmented tab selector for Sidebar panels -->
+        <div class="sidebar-tabs" role="tablist">
+          <button class="sidebar-tab-btn active" data-tab="chats" role="tab" aria-selected="true" type="button" title="Conversations">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
+            <span>Chats</span>
+          </button>
+          <button class="sidebar-tab-btn" data-tab="wiki" role="tab" aria-selected="false" type="button" title="Wiki Knowledge Base">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path></svg>
+            <span>Wiki</span>
+          </button>
+          <button class="sidebar-tab-btn" data-tab="conflicts" role="tab" aria-selected="false" type="button" title="Contradictions">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+            <span>Conflicts</span>
+          </button>
+        </div>
+
+        <!-- Sidebar Panels Container -->
+        <div class="sidebar-panels-container">
+          <!-- Panel 1: Chats (Active by Default) -->
+          <section class="panel session-panel">
+            <button id="newChatBtn" class="new-chat-sidebar-btn primary-button" type="button">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+              New Chat
+            </button>
+            
+            <div class="panel-heading">
+              <h2>Recent Chats</h2>
+              <button id="refreshSessionsBtn" class="icon-button" type="button" title="Refresh chats">
+                <span>↻</span>
+              </button>
+            </div>
+            <div id="sessionList" class="wiki-list"></div>
+            <div id="emptySessions" class="empty-mini">No saved chats yet.</div>
+          </section>
+
+          <!-- Panel 2: Wiki Pages (Hidden by Default) -->
+          <section class="panel wiki-panel" style="display: none;">
+            <!-- Group Upload inside Wiki tab for organic workspace management -->
+            <div class="sources-section">
+              <div class="panel-heading">
+                <h2>Source Documents</h2>
+                <span id="uploadState" class="status-pill">Ready</span>
+              </div>
+              <label class="upload-zone" for="pdfInput" id="dropZone">
+                <svg class="upload-zone-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+                <span>
+                  <strong>Upload PDF</strong>
+                  <small>Drag & drop or click to choose</small>
+                </span>
+              </label>
+              <input id="pdfInput" type="file" accept="application/pdf" hidden />
+              <div id="uploadError" class="inline-error" hidden></div>
+            </div>
+
+            <div class="wiki-pages-section">
+              <div class="panel-heading">
+                <h2>Wiki Pages</h2>
+                <div class="heading-actions">
+                  <button id="compactWikiBtn" class="icon-button" type="button" title="Compact Wiki">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22V12M12 12L7 17M12 12l5 5M12 2L7 7m5-5l5 5"></path></svg>
+                  </button>
+                  <button id="refreshWikiBtn" class="icon-button" type="button" title="Refresh wiki">
+                    <span>↻</span>
+                  </button>
+                </div>
+              </div>
+              <div id="wikiList" class="wiki-list"></div>
+              <div id="emptyWiki" class="empty-mini">Upload a PDF or create a page to start.</div>
+            </div>
+          </section>
+
+          <!-- Panel 3: Conflicts (Hidden by Default) -->
+          <section class="panel conflicts-panel" style="display: none;">
+            <div class="panel-heading">
+              <h2>Conflicts</h2>
+              <button id="scanConflictsBtn" class="icon-button" type="button" title="Scan wiki for contradictions">
+                <span>⚡ Scan</span>
+              </button>
+            </div>
+            <p class="panel-hint">Cross-page factual mismatches detected by KnowForge.</p>
+            <div id="conflictsList" class="conflicts-list"></div>
+            <div id="emptyConflicts" class="empty-mini">No open conflicts. Scan after uploading related documents.</div>
+          </section>
+        </div>
+
+        <!-- Premium User profile / Settings bar in Sidebar bottom -->
+        <div class="sidebar-footer">
+          <div class="user-profile-summary">
+            <div class="user-avatar">KF</div>
+            <div class="user-details">
+              <span class="user-name">Workspace Team</span>
+              <span id="networkState" class="user-status-text">Connected</span>
+            </div>
+          </div>
+          <div class="footer-actions">
+            <button id="llmSettingsBtn" class="footer-action-btn" type="button" title="LLM settings">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+            </button>
+            <button id="reportsBtn" class="footer-action-btn" type="button" title="Report generator">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line></svg>
+            </button>
+            <button id="logoutBtn" class="footer-action-btn logout" type="button" title="Logout">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>
             </button>
           </div>
-          <div id="wikiList" class="wiki-list"></div>
-          <div id="emptyWiki" class="empty-mini">Upload a PDF or create a page to start.</div>
-        </section>
+        </div>
 
-        <section class="panel conflicts-panel">
-          <div class="panel-heading">
-            <h2>Conflicts</h2>
-            <button id="scanConflictsBtn" class="icon-button" type="button" title="Scan wiki for contradictions">
-              <span>⚡</span>
-            </button>
-          </div>
-          <p class="panel-hint">Cross-page factual mismatches detected by KnowForge.</p>
-          <div id="conflictsList" class="conflicts-list"></div>
-          <div id="emptyConflicts" class="empty-mini">No open conflicts. Scan after uploading related documents.</div>
-        </section>
-
-        <section class="panel session-panel">
-          <div class="panel-heading">
-            <h2>Chats</h2>
-            <button id="refreshSessionsBtn" class="icon-button" type="button" title="Refresh chats">
-              <span>↻</span>
-            </button>
-          </div>
-          <div id="sessionList" class="wiki-list"></div>
-          <div id="emptySessions" class="empty-mini">No saved chats yet.</div>
-        </section>
         <div id="sidebarResizer" class="sidebar-resizer" role="separator" aria-label="Resize sidebar" aria-orientation="vertical"></div>
       </aside>
 
       <main class="chat-area">
         <header class="topbar">
-          <div>
-            <p class="eyebrow">Human and KnowForge Assistant</p>
-            <h2 id="chatBoardTitle">Chat Board</h2>
-          </div>
-          <div class="topbar-actions">
-            <div class="workspace-switcher" id="workspaceSwitcher" title="Switch workspace">
-              <span class="ws-icon">⬡</span>
-              <span id="activeWorkspaceName">Personal</span>
-              <span class="ws-caret">▾</span>
-              <div id="workspaceDropdown" class="ws-dropdown" hidden>
-                <div id="workspaceList" class="ws-list"></div>
-                <div class="ws-divider"></div>
-                <button id="newWorkspaceBtn" class="ws-action-btn" type="button">+ New Workspace</button>
-              </div>
-            </div>
-            <button id="reportsBtn" class="secondary-button" type="button">📊 Reports</button>
-            <button id="llmSettingsBtn" class="secondary-button" type="button">LLM Settings</button>
-            <button id="newChatBtn" class="secondary-button" type="button">New Chat</button>
-            <button id="compactWikiBtn" class="secondary-button" type="button">Compact Wiki</button>
-            <button id="logoutBtn" class="secondary-button" type="button">Logout</button>
+          <div class="topbar-left">
+            <h2 id="chatBoardTitle">New Chat</h2>
           </div>
         </header>
 
@@ -160,11 +218,9 @@
           </form>
           <div class="composer-meta">
             <span>Shift + Enter for new line</span>
-            <span id="networkState">Connected to local API</span>
           </div>
         </footer>
       </main>
-
     </div>
 
     <template id="messageTemplate">
@@ -178,9 +234,9 @@
               <span class="interaction-label"></span>
             </div>
             <div class="message-actions">
-              <button class="text-button copy-btn" type="button">Copy</button>
-              <button class="text-button reply-btn" type="button">Reply</button>
-              <button class="text-button comment-btn" type="button">Comment</button>
+              <button class="text-button copy-btn" type="button">📋 Copy</button>
+              <button class="text-button reply-btn" type="button">💬 Thread</button>
+              <button class="text-button comment-btn" type="button" style="display: none !important;">Comment</button>
               <button class="text-button save-wiki-btn" type="button" hidden>💾 Save to Wiki</button>
             </div>
           </header>
@@ -383,5 +439,60 @@
     </div>
 
     <script src="/static/app.js" type="module"></script>
+    
+    <!-- Tab switching logic & Header Delegation for smooth modern UI -->
+    <script>
+      document.addEventListener('DOMContentLoaded', () => {
+        const tabs = document.querySelectorAll('.sidebar-tab-btn');
+        const panelChats = document.querySelector('.session-panel');
+        const panelWiki = document.querySelector('.wiki-panel');
+        const panelConflicts = document.querySelector('.conflicts-panel');
+
+        function switchTab(tabId) {
+          tabs.forEach(btn => {
+            const isActive = btn.dataset.tab === tabId;
+            btn.classList.toggle('active', isActive);
+            btn.setAttribute('aria-selected', isActive ? 'true' : 'false');
+          });
+
+          if (tabId === 'chats') {
+            panelChats.style.display = 'flex';
+            panelWiki.style.display = 'none';
+            panelConflicts.style.display = 'none';
+          } else if (tabId === 'wiki') {
+            panelChats.style.display = 'none';
+            panelWiki.style.display = 'flex';
+            panelConflicts.style.display = 'none';
+          } else if (tabId === 'conflicts') {
+            panelChats.style.display = 'none';
+            panelWiki.style.display = 'none';
+            panelConflicts.style.display = 'flex';
+          }
+        }
+
+        tabs.forEach(tab => {
+          tab.addEventListener('click', () => {
+            const tabId = tab.dataset.tab;
+            switchTab(tabId);
+            localStorage.setItem('knowforge_active_tab', tabId);
+          });
+        });
+
+        // Restore active tab or default to chats
+        const savedTab = localStorage.getItem('knowforge_active_tab') || 'chats';
+        switchTab(savedTab);
+
+        // Header new chat button delegation
+        const headerNewChat = document.getElementById('newChatBtnHeader');
+        if (headerNewChat) {
+          headerNewChat.addEventListener('click', () => {
+            const primaryNewChat = document.getElementById('newChatBtn');
+            if (primaryNewChat) {
+              primaryNewChat.click();
+            }
+          });
+        }
+      });
+    </script>
   </body>
 </html>

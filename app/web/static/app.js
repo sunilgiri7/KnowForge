@@ -701,8 +701,21 @@ function renderThinking(stepIndex = 0) {
 }
 
 function renderChat() {
+  const isEmpty = state.messages.length === 0;
+  const titleEl = document.querySelector("#chatBoardTitle");
+  if (titleEl) {
+    if (isEmpty) {
+      titleEl.textContent = "";
+    } else if (state.currentSessionId) {
+      const currentSession = state.sessions.find((s) => s.id === state.currentSessionId);
+      titleEl.textContent = currentSession ? (currentSession.title || "") : "";
+    } else {
+      titleEl.textContent = "";
+    }
+  }
+
   els.chatBoard.innerHTML = "";
-  if (!state.messages.length) {
+  if (isEmpty) {
     const welcome = document.createElement("div");
     welcome.className = "welcome-card";
     welcome.innerHTML = `
@@ -734,6 +747,7 @@ function renderMessageNode(message, children, depth) {
   node.classList.add(message.role === "assistant" ? "assistant" : "user");
   node.classList.add(`interaction-${message.interaction || "message"}`);
   if (message.failed) node.classList.add("failed");
+  if (message.pending) node.classList.add("pending");
   node.querySelector(".message-author").textContent =
     message.role === "assistant" ? "KnowForge Assistant" : "You";
   node.querySelector(".message-time").textContent = new Date(message.createdAt).toLocaleTimeString([], {
@@ -1740,7 +1754,14 @@ function resizeTextarea() {
 loadSidebarLayout();
 applySidebarLayout();
 bindEvents();
-showApp(false);
+
+// Hydrate auth synchronously to completely eliminate split-second login page flashes
+loadAuth();
+if (state.token) {
+  showApp(true);
+} else {
+  showApp(false);
+}
 bootstrapAuth();
 
 // =============================================================================
