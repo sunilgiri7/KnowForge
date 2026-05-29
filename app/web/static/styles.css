@@ -1612,3 +1612,230 @@ body.resizing-sidebar {
   color: var(--muted);
   margin-top: 2px;
 }
+
+/* =========================================================
+   TIER 2 — Workspace Switcher
+   ========================================================= */
+.workspace-switcher {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 650;
+  color: var(--ink);
+  transition: border-color 0.15s, box-shadow 0.15s;
+  user-select: none;
+}
+.workspace-switcher:hover { border-color: var(--accent); }
+.ws-icon { font-size: 16px; color: var(--accent); }
+.ws-caret { font-size: 10px; color: var(--muted); }
+.ws-dropdown {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  min-width: 200px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  z-index: 200;
+  overflow: hidden;
+}
+.ws-list { display: grid; }
+.ws-item {
+  padding: 10px 14px;
+  font-size: 13px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ws-item:hover { background: var(--accent-soft); }
+.ws-item.active { color: var(--accent-strong); font-weight: 700; }
+.ws-divider { border-top: 1px solid var(--line); margin: 4px 0; }
+.ws-action-btn {
+  width: 100%;
+  padding: 10px 14px;
+  border: none;
+  background: transparent;
+  text-align: left;
+  font-size: 13px;
+  color: var(--accent);
+  cursor: pointer;
+  font-weight: 650;
+}
+.ws-action-btn:hover { background: var(--accent-soft); }
+
+/* =========================================================
+   TIER 2 — Versions Modal
+   ========================================================= */
+.versions-card { width: min(720px, 100%); max-height: 82vh; display: flex; flex-direction: column; }
+.versions-body { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; }
+.versions-list { display: grid; gap: 8px; }
+.version-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+}
+.version-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  min-width: 32px;
+  justify-content: center;
+}
+.version-meta { flex: 1; min-width: 0; }
+.version-meta strong { font-size: 13px; display: block; }
+.version-meta span { font-size: 11px; color: var(--muted); }
+.version-actions { display: flex; gap: 6px; }
+.versions-diff { display: flex; flex-direction: column; gap: 12px; }
+.diff-header { display: flex; align-items: center; gap: 16px; }
+.diff-semantic {
+  padding: 12px 16px;
+  border-radius: var(--radius);
+  background: var(--accent-soft);
+  border-left: 3px solid var(--accent);
+  font-size: 13px;
+  line-height: 1.6;
+}
+.diff-risk-high { border-left-color: var(--danger); background: rgba(180,35,24,0.07); }
+.diff-risk-medium { border-left-color: var(--warn); background: rgba(161,92,0,0.07); }
+.diff-hunks { display: grid; gap: 4px; font-family: monospace; font-size: 12px; }
+.diff-hunk-equal { color: var(--muted); padding: 2px 8px; }
+.diff-hunk-insert { background: rgba(26,127,55,0.10); color: #1a7f37; padding: 2px 8px; }
+.diff-hunk-delete { background: rgba(180,35,24,0.08); color: var(--danger); padding: 2px 8px; }
+.diff-hunk-replace .diff-hunk-delete,
+.diff-hunk-replace .diff-hunk-insert { display: block; }
+
+/* =========================================================
+   TIER 2 — Save to Wiki form
+   ========================================================= */
+.save-wiki-form {
+  display: grid;
+  gap: 12px;
+}
+.save-wiki-form input {
+  min-height: 40px;
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--ink);
+  outline: none;
+  width: 100%;
+}
+.save-wiki-form input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(11,122,117,0.12); }
+
+/* =========================================================
+   TIER 2 — Reports Modal
+   ========================================================= */
+.reports-card { width: min(700px, 100%); max-height: 82vh; display: flex; flex-direction: column; }
+.reports-body { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; padding-top: 8px; }
+.reports-tabs { display: flex; gap: 6px; margin-bottom: 8px; }
+.report-template-list { display: grid; gap: 8px; }
+.report-template-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+}
+.report-template-row strong { flex: 1; font-size: 13px; }
+.report-new-template { border: 1px dashed var(--line); border-radius: var(--radius); padding: 12px; }
+.report-new-template summary { cursor: pointer; font-size: 13px; font-weight: 650; color: var(--accent); }
+.report-template-form { display: grid; gap: 10px; margin-top: 12px; }
+.rt-columns { display: grid; gap: 8px; }
+.rt-col-row { display: flex; gap: 6px; align-items: center; }
+.rt-col-row input { flex: 1; min-height: 36px; padding: 7px 10px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); color: var(--ink); }
+.rt-col-row input:focus { border-color: var(--accent); outline: none; }
+.rt-remove-col { flex: 0; color: var(--danger); }
+.jobs-list { display: grid; gap: 8px; }
+.jobs-empty { text-align: center; padding: 32px 16px; color: var(--muted); }
+.jobs-empty-icon { font-size: 32px; margin-bottom: 8px; }
+.jobs-empty p { margin: 4px 0; font-size: 13px; }
+.jobs-loading { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; padding: 16px 0; }
+.spinner-sm {
+  width: 14px; height: 14px;
+  border: 2px solid var(--line);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  display: inline-block;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.job-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  transition: border-color 0.15s;
+}
+.job-row:has(.job-status-done) { border-left: 3px solid #1a7f37; }
+.job-row:has(.job-status-failed) { border-left: 3px solid var(--danger); }
+.job-row:has(.job-status-processing) { border-left: 3px solid var(--warn); }
+.job-row:has(.job-status-pending) { border-left: 3px solid var(--line); }
+.job-info { flex: 1; min-width: 0; display: grid; gap: 6px; }
+.job-header-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.job-status-badge {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 2px 8px; border-radius: 999px;
+  font-size: 11px; font-weight: 700;
+  white-space: nowrap;
+}
+.job-status-done { background: rgba(26,127,55,0.12); color: #1a7f37; }
+.job-status-failed { background: rgba(180,35,24,0.10); color: var(--danger); }
+.job-status-processing { background: rgba(161,92,0,0.10); color: var(--warn); }
+.job-status-pending { background: var(--surface-2); color: var(--muted); }
+.job-template-name { font-size: 13px; font-weight: 700; color: var(--ink); }
+.job-format-badge {
+  display: inline-flex; padding: 2px 8px; border-radius: 999px;
+  background: var(--accent-soft); color: var(--accent-strong);
+  font-size: 11px; font-weight: 700;
+}
+.job-meta { display: flex; flex-wrap: wrap; gap: 10px; font-size: 11px; color: var(--muted); }
+.job-meta code { font-size: 10px; background: var(--surface-2); padding: 1px 5px; border-radius: 4px; }
+.job-error-msg { font-size: 12px; color: var(--danger); background: rgba(180,35,24,0.06); padding: 6px 10px; border-radius: var(--radius); }
+.job-actions { display: flex; flex-direction: column; gap: 6px; flex-shrink: 0; }
+/* Template row enhancements */
+.report-template-row { align-items: flex-start; }
+.rt-info { flex: 1; display: grid; gap: 3px; min-width: 0; }
+.rt-info strong { font-size: 13px; }
+.rt-cols-preview { font-size: 11px; color: var(--muted); }
+.rt-desc { font-size: 11px; color: var(--muted); font-style: italic; }
+.rt-actions { display: flex; gap: 6px; align-items: center; flex-shrink: 0; }
+
+.llm-label select, .llm-label input {
+  min-height: 40px;
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--ink);
+  outline: none;
+  width: 100%;
+}
+.llm-label select:focus, .llm-label input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(11,122,117,0.12);
+}

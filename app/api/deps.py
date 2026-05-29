@@ -8,9 +8,10 @@ from sqlalchemy.orm import Session
 
 from app.core.errors import KnowForgeError
 from app.core.security import decode_access_token
-from app.db.models import User
+from app.db.models import User, Workspace
 from app.db.session import get_db
 from app.llmwiki.storage import WikiStore
+from app.services.workspace import ensure_personal_workspace, get_active_workspace, get_member
 
 bearer_scheme = HTTPBearer(auto_error=False)
 
@@ -34,5 +35,19 @@ def get_current_user(
     return user
 
 
+def get_active_workspace_dep(
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> Workspace:
+    """Returns the user's currently active workspace, auto-creating if needed."""
+    return get_active_workspace(db, user)
+
+
 def wiki_store_for_user(user: User) -> WikiStore:
+    """Legacy: kept for backward-compatible routes. Prefer wiki_store_for_workspace."""
     return WikiStore().for_user(user.id)
+
+
+def wiki_store_for_workspace(workspace: Workspace) -> WikiStore:
+    """Returns a workspace-scoped WikiStore."""
+    return WikiStore().for_workspace(workspace.id)

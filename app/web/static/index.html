@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>KnowForge Dashboard</title>
+    <title>KnowForge — Team Knowledge Operating Layer</title>
     <!-- Favicon: SVG preferred for crisp rendering -->
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
     <link rel="shortcut icon" href="/static/favicon.svg">
@@ -121,9 +121,20 @@
         <header class="topbar">
           <div>
             <p class="eyebrow">Human and KnowForge Assistant</p>
-            <h2>Chat Board</h2>
+            <h2 id="chatBoardTitle">Chat Board</h2>
           </div>
           <div class="topbar-actions">
+            <div class="workspace-switcher" id="workspaceSwitcher" title="Switch workspace">
+              <span class="ws-icon">⬡</span>
+              <span id="activeWorkspaceName">Personal</span>
+              <span class="ws-caret">▾</span>
+              <div id="workspaceDropdown" class="ws-dropdown" hidden>
+                <div id="workspaceList" class="ws-list"></div>
+                <div class="ws-divider"></div>
+                <button id="newWorkspaceBtn" class="ws-action-btn" type="button">+ New Workspace</button>
+              </div>
+            </div>
+            <button id="reportsBtn" class="secondary-button" type="button">📊 Reports</button>
             <button id="llmSettingsBtn" class="secondary-button" type="button">LLM Settings</button>
             <button id="newChatBtn" class="secondary-button" type="button">New Chat</button>
             <button id="compactWikiBtn" class="secondary-button" type="button">Compact Wiki</button>
@@ -170,6 +181,7 @@
               <button class="text-button copy-btn" type="button">Copy</button>
               <button class="text-button reply-btn" type="button">Reply</button>
               <button class="text-button comment-btn" type="button">Comment</button>
+              <button class="text-button save-wiki-btn" type="button" hidden>💾 Save to Wiki</button>
             </div>
           </header>
           <div class="message-body"></div>
@@ -229,6 +241,111 @@
             <span id="llmStatusPill" class="status-pill muted">Not connected</span>
           </div>
           <div id="llmError" class="inline-error" hidden></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Versions Modal -->
+    <div id="versionsModal" class="modal-overlay" hidden>
+      <div class="modal-card versions-card" role="dialog" aria-modal="true" aria-labelledby="versionsTitle">
+        <div class="modal-header">
+          <strong id="versionsTitle">Version History</strong>
+          <button id="versionsCloseBtn" class="icon-button" type="button" title="Close">✕</button>
+        </div>
+        <div class="versions-body">
+          <div id="versionsList" class="versions-list"></div>
+          <div id="versionsDiff" class="versions-diff" hidden>
+            <div class="diff-header">
+              <button id="diffBackBtn" class="text-button" type="button">← Back to list</button>
+              <span id="diffLabel"></span>
+            </div>
+            <div id="diffSemantic" class="diff-semantic"></div>
+            <div id="diffHunks" class="diff-hunks"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Save to Wiki Modal -->
+    <div id="saveWikiModal" class="modal-overlay" hidden>
+      <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="saveWikiTitle">
+        <div class="modal-header">
+          <strong id="saveWikiTitle">Save Answer to Wiki</strong>
+          <button id="saveWikiCloseBtn" class="icon-button" type="button" title="Close">✕</button>
+        </div>
+        <div class="save-wiki-form">
+          <label class="llm-label">Page Title
+            <input id="saveWikiTitleInput" type="text" placeholder="e.g. Q3 2026 Procurement Policy" />
+          </label>
+          <label class="llm-label">Tags (comma separated)
+            <input id="saveWikiTagsInput" type="text" placeholder="e.g. policy, procurement, 2026" />
+          </label>
+          <label class="llm-label">Append to existing page (optional slug)
+            <input id="saveWikiTargetInput" type="text" placeholder="e.g. procurement-policy" />
+          </label>
+          <div class="llm-actions">
+            <button id="saveWikiSubmitBtn" class="primary-button" type="button">Submit for Review</button>
+          </div>
+          <div id="saveWikiStatus" class="inline-error" style="color:var(--accent)" hidden></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Reports Modal -->
+    <div id="reportsModal" class="modal-overlay" hidden>
+      <div class="modal-card reports-card" role="dialog" aria-modal="true" aria-labelledby="reportsTitle">
+        <div class="modal-header">
+          <strong id="reportsTitle">📊 Report Generator</strong>
+          <button id="reportsCloseBtn" class="icon-button" type="button" title="Close">✕</button>
+        </div>
+        <div class="reports-body">
+          <div class="reports-tabs">
+            <button id="reportTabTemplates" class="auth-tab active" type="button">Templates</button>
+            <button id="reportTabGenerate" class="auth-tab" type="button">Generate</button>
+            <button id="reportTabJobs" class="auth-tab" type="button">Jobs</button>
+          </div>
+          <!-- Templates tab -->
+          <div id="reportPanelTemplates">
+            <div id="reportTemplateList" class="report-template-list"></div>
+            <details class="report-new-template">
+              <summary>+ New Template</summary>
+              <div class="report-template-form">
+                <label class="llm-label">Name<input id="rtName" type="text" placeholder="e.g. Vendor Scorecard" /></label>
+                <label class="llm-label">Description<input id="rtDesc" type="text" placeholder="Optional" /></label>
+                <div id="rtColumns" class="rt-columns">
+                  <div class="rt-col-row">
+                    <input class="rt-col-key" type="text" placeholder="key" />
+                    <input class="rt-col-label" type="text" placeholder="Column label" />
+                    <input class="rt-col-instr" type="text" placeholder="Extraction instruction" />
+                    <button class="rt-remove-col text-button" type="button">✕</button>
+                  </div>
+                </div>
+                <button id="rtAddCol" class="text-button" type="button">+ Add Column</button>
+                <button id="rtSave" class="primary-button" type="button">Save Template</button>
+                <div id="rtError" class="inline-error" hidden></div>
+              </div>
+            </details>
+          </div>
+          <!-- Generate tab -->
+          <div id="reportPanelGenerate" hidden>
+            <label class="llm-label">Template
+              <select id="genTemplateSelect"></select>
+            </label>
+            <label class="llm-label">Format
+              <select id="genFormatSelect">
+                <option value="xlsx">Excel (XLSX)</option>
+                <option value="pdf">PDF</option>
+                <option value="docx">Word (DOCX)</option>
+              </select>
+            </label>
+            <button id="genRunBtn" class="primary-button" type="button">Generate Report</button>
+            <div id="genStatus" class="inline-error" style="color:var(--accent)" hidden></div>
+          </div>
+          <!-- Jobs tab -->
+          <div id="reportPanelJobs" hidden>
+            <button id="refreshJobsBtn" class="secondary-button" type="button">↻ Refresh</button>
+            <div id="jobsList" class="jobs-list"></div>
+          </div>
         </div>
       </div>
     </div>

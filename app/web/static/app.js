@@ -1721,3 +1721,756 @@ applySidebarLayout();
 bindEvents();
 showApp(false);
 bootstrapAuth();
+
+// =============================================================================
+// TIER 2 — Workspace Switcher
+// =============================================================================
+const API_WORKSPACES = "/api/v1/workspaces";
+const API_PROMOTIONS = "/api/v1/promotions";
+const API_REPORTS = "/api/v1/reports";
+
+let tier2State = {
+  workspaces: [],
+  activeWorkspaceId: null,
+  wsDropdownOpen: false,
+  // Versions
+  versionsSlug: null,
+  versionsList: [],
+  diffFromVersion: null,
+  // Save to wiki
+  pendingSaveContent: null,
+  // Reports
+  reportTemplates: [],
+  reportJobs: [],
+  activeReportTab: "templates",
+};
+
+function bindTier2Events() {
+  // Workspace switcher
+  const switcher = document.getElementById("workspaceSwitcher");
+  const dropdown = document.getElementById("workspaceDropdown");
+  if (switcher) {
+    switcher.addEventListener("click", (e) => {
+      e.stopPropagation();
+      tier2State.wsDropdownOpen = !tier2State.wsDropdownOpen;
+      dropdown.hidden = !tier2State.wsDropdownOpen;
+    });
+  }
+  document.getElementById("newWorkspaceBtn")?.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    const name = prompt("New workspace name:");
+    if (!name?.trim()) return;
+    try {
+      await apiFetch(API_WORKSPACES, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: name.trim() }),
+      });
+      await loadWorkspaces();
+      toast("Workspace created.");
+    } catch (err) { toast(err.message, "error"); }
+  });
+
+  // Reports button
+  document.getElementById("reportsBtn")?.addEventListener("click", () => openReportsModal());
+
+  // Versions modal
+  document.getElementById("versionsCloseBtn")?.addEventListener("click", () => {
+    document.getElementById("versionsModal").hidden = true;
+  });
+  document.getElementById("versionsModal")?.addEventListener("click", (e) => {
+    if (e.target === document.getElementById("versionsModal"))
+      document.getElementById("versionsModal").hidden = true;
+  });
+  document.getElementById("diffBackBtn")?.addEventListener("click", () => {
+    document.getElementById("versionsList").hidden = false;
+    document.getElementById("versionsDiff").hidden = true;
+  });
+
+  // Save to wiki modal
+  document.getElementById("saveWikiCloseBtn")?.addEventListener("click", () => {
+    document.getElementById("saveWikiModal").hidden = true;
+  });
+  document.getElementById("saveWikiModal")?.addEventListener("click", (e) => {
+    if (e.target === document.getElementById("saveWikiModal"))
+      document.getElementById("saveWikiModal").hidden = true;
+  });
+  document.getElementById("saveWikiSubmitBtn")?.addEventListener("click", submitPromotion);
+
+  // Reports modal
+  document.getElementById("reportsCloseBtn")?.addEventListener("click", closeReportsModal);
+  document.getElementById("reportsModal")?.addEventListener("click", (e) => {
+    if (e.target === document.getElementById("reportsModal"))
+      closeReportsModal();
+  });
+  document.getElementById("reportTabTemplates")?.addEventListener("click", () => switchReportTab("templates"));
+  document.getElementById("reportTabGenerate")?.addEventListener("click", () => switchReportTab("generate"));
+  document.getElementById("reportTabJobs")?.addEventListener("click", () => switchReportTab("jobs"));
+  document.getElementById("rtAddCol")?.addEventListener("click", addColumnRow);
+  document.getElementById("rtSave")?.addEventListener("click", saveReportTemplate);
+  document.getElementById("genRunBtn")?.addEventListener("click", runReportGeneration);
+  document.getElementById("refreshJobsBtn")?.addEventListener("click", () => loadReportJobs());
+
+  // Global close dropdown
+  window.addEventListener("click", () => {
+    if (tier2State.wsDropdownOpen) {
+      tier2State.wsDropdownOpen = false;
+      if (dropdown) dropdown.hidden = true;
+    }
+  });
+
+  window.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape") return;
+    document.getElementById("versionsModal").hidden = true;
+    document.getElementById("saveWikiModal").hidden = true;
+    closeReportsModal();
+  });
+}
+
+async function loadWorkspaces() {
+  try {
+    const data = await apiFetch(API_WORKSPACES);
+    tier2State.workspaces = data.workspaces || [];
+    tier2State.activeWorkspaceId = data.active_workspace_id;
+    renderWorkspaceSwitcher();
+  } catch { /* silently ignore if workspaces not supported */ }
+}
+
+function renderWorkspaceSwitcher() {
+  const nameEl = document.getElementById("activeWorkspaceName");
+  const listEl = document.getElementById("workspaceList");
+  if (!nameEl || !listEl) return;
+  const active = tier2State.workspaces.find(w => w.id === tier2State.activeWorkspaceId);
+  nameEl.textContent = active?.name || "Personal";
+  listEl.innerHTML = "";
+  for (const ws of tier2State.workspaces) {
+    const item = document.createElement("div");
+    item.className = `ws-item ${ws.id === tier2State.activeWorkspaceId ? "active" : ""}`;
+    item.innerHTML = `<span>⬡</span><span>${escapeHtml(ws.name)}</span>${ws.your_role ? `<small style="color:var(--muted)">${escapeHtml(ws.your_role)}</small>` : ""}`;
+    item.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      if (ws.id === tier2State.activeWorkspaceId) { document.getElementById("workspaceDropdown").hidden = true; return; }
+      try {
+        await apiFetch(`${API_WORKSPACES}/switch`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ workspace_id: ws.id }),
+        });
+        tier2State.activeWorkspaceId = ws.id;
+        document.getElementById("workspaceDropdown").hidden = true;
+        tier2State.wsDropdownOpen = false;
+        renderWorkspaceSwitcher();
+        await Promise.all([loadWikiPages(), loadConflicts()]);
+        toast(`Switched to "${ws.name}".`);
+      } catch (err) { toast(err.message, "error"); }
+    });
+    listEl.appendChild(item);
+  }
+}
+
+// =============================================================================
+// TIER 2 — Versions Modal
+// =============================================================================
+async function openVersionsModal(slug) {
+  tier2State.versionsSlug = slug;
+  document.getElementById("versionsTitle").textContent = `Version History — ${slug}`;
+  document.getElementById("versionsList").hidden = false;
+  document.getElementById("versionsDiff").hidden = true;
+  document.getElementById("versionsModal").hidden = false;
+  document.getElementById("versionsList").innerHTML = `<p class="empty-mini">Loading…</p>`;
+  try {
+    const versions = await apiFetch(`/api/v1/wiki/pages/${encodeURIComponent(slug)}/versions`);
+    tier2State.versionsList = versions;
+    renderVersionsList(versions, slug);
+  } catch (err) {
+    document.getElementById("versionsList").innerHTML = `<p class="inline-error">${escapeHtml(err.message)}</p>`;
+  }
+}
+
+function renderVersionsList(versions, slug) {
+  const el = document.getElementById("versionsList");
+  if (!versions.length) { el.innerHTML = `<p class="empty-mini">No versions recorded yet.</p>`; return; }
+  el.innerHTML = "";
+  for (const v of versions) {
+    const row = document.createElement("div");
+    row.className = "version-row";
+    const ts = v.created_at ? new Date(v.created_at).toLocaleString() : "";
+    row.innerHTML = `
+      <span class="version-badge">v${v.version_number}</span>
+      <div class="version-meta">
+        <strong>${escapeHtml(v.created_reason)}</strong>
+        <span>${escapeHtml(v.created_by_name || "system")} · ${ts}</span>
+      </div>
+      <div class="version-actions">
+        ${v.version_number > 1 ? `<button class="text-button diff-btn" data-v="${v.version_number}">Diff ↔ prev</button>` : ""}
+      </div>
+    `;
+    row.querySelector(".diff-btn")?.addEventListener("click", () =>
+      loadDiff(slug, v.version_number - 1, v.version_number)
+    );
+    el.appendChild(row);
+  }
+}
+
+async function loadDiff(slug, fromV, toV) {
+  document.getElementById("versionsList").hidden = true;
+  document.getElementById("versionsDiff").hidden = false;
+  document.getElementById("diffLabel").textContent = `v${fromV} → v${toV}`;
+  document.getElementById("diffSemantic").innerHTML = `<p class="empty-mini">Computing semantic diff…</p>`;
+  document.getElementById("diffHunks").innerHTML = "";
+  try {
+    const diff = await apiFetch(`/api/v1/wiki/pages/${encodeURIComponent(slug)}/diff?from=${fromV}&to=${toV}`);
+    const riskClass = diff.risk_level === "high" ? "diff-risk-high" : diff.risk_level === "medium" ? "diff-risk-medium" : "";
+    const semantic = document.getElementById("diffSemantic");
+    semantic.className = `diff-semantic ${riskClass}`;
+    let semHtml = `<strong>Risk: ${escapeHtml(diff.risk_level?.toUpperCase() || "LOW")}</strong><br>${escapeHtml(diff.semantic_summary || "No semantic summary available.")}`;
+    if (diff.changed_facts?.length) {
+      semHtml += `<ul>${diff.changed_facts.map(f => `<li>${escapeHtml(f)}</li>`).join("")}</ul>`;
+    }
+    semantic.innerHTML = semHtml;
+
+    const hunksEl = document.getElementById("diffHunks");
+    hunksEl.innerHTML = "";
+    for (const hunk of diff.line_hunks || []) {
+      if (hunk.kind === "equal") continue; // skip unchanged lines in hunk view
+      const block = document.createElement("div");
+      block.className = `diff-hunk-${hunk.kind}`;
+      if (hunk.kind === "delete" || hunk.kind === "replace") {
+        for (const line of hunk.old_lines || []) {
+          const l = document.createElement("div");
+          l.className = "diff-hunk-delete";
+          l.textContent = `- ${line}`;
+          block.appendChild(l);
+        }
+      }
+      if (hunk.kind === "insert" || hunk.kind === "replace") {
+        for (const line of hunk.new_lines || []) {
+          const l = document.createElement("div");
+          l.className = "diff-hunk-insert";
+          l.textContent = `+ ${line}`;
+          block.appendChild(l);
+        }
+      }
+      hunksEl.appendChild(block);
+    }
+  } catch (err) {
+    document.getElementById("diffSemantic").innerHTML = `<p class="inline-error">${escapeHtml(err.message)}</p>`;
+  }
+}
+
+// Make "Versions" appear in the wiki page menu
+const _origRenderWikiPages = typeof renderWikiPages === "function" ? renderWikiPages : null;
+// Patch the wiki page menu to add "Versions" action after DOM builds
+
+// =============================================================================
+// TIER 2 — Save to Wiki (Promotion)
+// =============================================================================
+function openSaveToWikiModal(content) {
+  tier2State.pendingSaveContent = content;
+  document.getElementById("saveWikiTitleInput").value = "";
+  document.getElementById("saveWikiTagsInput").value = "";
+  document.getElementById("saveWikiTargetInput").value = "";
+  document.getElementById("saveWikiStatus").hidden = true;
+  document.getElementById("saveWikiModal").hidden = false;
+}
+
+async function submitPromotion() {
+  const title = document.getElementById("saveWikiTitleInput").value.trim();
+  const tagsRaw = document.getElementById("saveWikiTagsInput").value.trim();
+  const target = document.getElementById("saveWikiTargetInput").value.trim();
+  const statusEl = document.getElementById("saveWikiStatus");
+  if (!title) { statusEl.textContent = "Page title is required."; statusEl.hidden = false; return; }
+  const tags = tagsRaw ? tagsRaw.split(",").map(t => t.trim()).filter(Boolean) : [];
+  try {
+    await apiFetch(API_PROMOTIONS, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        proposed_title: title,
+        proposed_content: tier2State.pendingSaveContent || "",
+        proposed_tags: tags,
+        target_page_slug: target || null,
+      }),
+    });
+    document.getElementById("saveWikiModal").hidden = true;
+    toast("Submitted for review. An admin will approve it.");
+  } catch (err) {
+    statusEl.textContent = err.message;
+    statusEl.hidden = false;
+  }
+}
+
+// Wire "Save to Wiki" on assistant messages
+function wireMessageSaveBtn(articleEl, message) {
+  if (message.role !== "assistant") return;
+  const btn = articleEl.querySelector(".save-wiki-btn");
+  if (!btn) return;
+  btn.hidden = false;
+  btn.addEventListener("click", () => openSaveToWikiModal(message.content));
+}
+
+// =============================================================================
+// TIER 2 — Reports Modal (fully working)
+// =============================================================================
+
+let reportPollTimer = null;  // interval handle for auto-refresh
+
+function openReportsModal() {
+  document.getElementById("reportsModal").hidden = false;
+  switchReportTab("templates");
+  loadReportTemplates();
+}
+
+function closeReportsModal() {
+  document.getElementById("reportsModal").hidden = true;
+  // Stop polling when modal is closed
+  if (reportPollTimer) { clearInterval(reportPollTimer); reportPollTimer = null; }
+}
+
+function switchReportTab(tab) {
+  tier2State.activeReportTab = tab;
+  ["templates", "generate", "jobs"].forEach(t => {
+    const btn = document.getElementById(`reportTab${t.charAt(0).toUpperCase() + t.slice(1)}`);
+    const panel = document.getElementById(`reportPanel${t.charAt(0).toUpperCase() + t.slice(1)}`);
+    if (btn) btn.classList.toggle("active", t === tab);
+    if (panel) panel.hidden = t !== tab;
+  });
+  if (tab === "generate") {
+    loadReportTemplatesIntoSelect();
+    // Reset generate UI
+    const statusEl = document.getElementById("genStatus");
+    if (statusEl) statusEl.hidden = true;
+    const genBtn = document.getElementById("genRunBtn");
+    if (genBtn) { genBtn.disabled = false; genBtn.textContent = "Generate Report"; }
+  }
+  if (tab === "jobs") {
+    loadReportJobs();
+    // Start polling every 4s while on jobs tab
+    if (reportPollTimer) clearInterval(reportPollTimer);
+    reportPollTimer = setInterval(() => {
+      if (tier2State.activeReportTab === "jobs" && !document.getElementById("reportsModal").hidden) {
+        loadReportJobs(true);  // silent refresh
+      } else {
+        clearInterval(reportPollTimer);
+        reportPollTimer = null;
+      }
+    }, 4000);
+  } else {
+    if (reportPollTimer) { clearInterval(reportPollTimer); reportPollTimer = null; }
+  }
+}
+
+// ---------- Templates ----------
+
+async function loadReportTemplates() {
+  const el = document.getElementById("reportTemplateList");
+  if (!el) return;
+  try {
+    const templates = await apiFetch(`${API_REPORTS}/templates`);
+    tier2State.reportTemplates = templates;
+    renderReportTemplates(templates);
+  } catch (err) {
+    el.innerHTML = `<p class="inline-error">Failed to load templates: ${escapeHtml(err.message)}</p>`;
+  }
+}
+
+function renderReportTemplates(templates) {
+  const el = document.getElementById("reportTemplateList");
+  if (!el) return;
+  if (!templates.length) {
+    el.innerHTML = `<p class="empty-mini">No templates yet — create one below ↓</p>`;
+    return;
+  }
+  el.innerHTML = "";
+  for (const t of templates) {
+    const row = document.createElement("div");
+    row.className = "report-template-row";
+    const colNames = (t.columns || []).map(c => c.label).join(", ") || "—";
+    row.innerHTML = `
+      <div class="rt-info">
+        <strong>${escapeHtml(t.name)}</strong>
+        <span class="rt-cols-preview" title="${escapeHtml(colNames)}">${t.columns?.length || 0} column${t.columns?.length !== 1 ? "s" : ""}: ${escapeHtml(colNames.slice(0, 60))}${colNames.length > 60 ? "…" : ""}</span>
+        ${t.description ? `<span class="rt-desc">${escapeHtml(t.description)}</span>` : ""}
+      </div>
+      <div class="rt-actions">
+        <button class="secondary-button rt-use-btn" data-id="${escapeHtml(t.id)}" data-name="${escapeHtml(t.name)}" type="button">Use →</button>
+        <button class="icon-button rt-del-btn" data-id="${escapeHtml(t.id)}" data-name="${escapeHtml(t.name)}" type="button" title="Delete template">🗑</button>
+      </div>
+    `;
+    row.querySelector(".rt-use-btn").addEventListener("click", () => {
+      switchReportTab("generate");
+      const sel = document.getElementById("genTemplateSelect");
+      if (sel) sel.value = t.id;
+    });
+    row.querySelector(".rt-del-btn").addEventListener("click", async () => {
+      if (!confirm(`Delete template "${t.name}"? This cannot be undone.`)) return;
+      try {
+        await apiFetch(`${API_REPORTS}/templates/${t.id}`, { method: "DELETE" });
+        toast("Template deleted.");
+        await loadReportTemplates();
+      } catch (err) { toast(err.message, "error"); }
+    });
+    el.appendChild(row);
+  }
+}
+
+function addColumnRow() {
+  const container = document.getElementById("rtColumns");
+  const row = document.createElement("div");
+  row.className = "rt-col-row";
+  row.innerHTML = `
+    <input class="rt-col-key" type="text" placeholder="key (e.g. salary)" title="Unique identifier, no spaces" />
+    <input class="rt-col-label" type="text" placeholder="Column label (e.g. Salary)" />
+    <input class="rt-col-instr" type="text" placeholder="Instruction (e.g. Find the annual salary)" />
+    <button class="rt-remove-col icon-button" type="button" title="Remove column">✕</button>
+  `;
+  row.querySelector(".rt-remove-col").addEventListener("click", () => {
+    // Don't allow removing the last column
+    const allRows = container.querySelectorAll(".rt-col-row");
+    if (allRows.length <= 1) { toast("At least one column is required.", "error"); return; }
+    row.remove();
+  });
+  container.appendChild(row);
+}
+
+async function saveReportTemplate() {
+  const name = document.getElementById("rtName").value.trim();
+  const desc = document.getElementById("rtDesc").value.trim();
+  const errEl = document.getElementById("rtError");
+  const btn = document.getElementById("rtSave");
+  errEl.hidden = true;
+
+  if (!name) { errEl.textContent = "Template name is required."; errEl.hidden = false; return; }
+
+  const colRows = document.querySelectorAll("#rtColumns .rt-col-row");
+  const columns = [];
+  let hasError = false;
+  for (const row of colRows) {
+    const key = row.querySelector(".rt-col-key").value.trim().replace(/\s+/g, "_").toLowerCase();
+    const label = row.querySelector(".rt-col-label").value.trim();
+    const instr = row.querySelector(".rt-col-instr").value.trim();
+    if (!key || !label || !instr) {
+      errEl.textContent = "All column fields (key, label, instruction) must be filled in.";
+      errEl.hidden = false;
+      hasError = true;
+      break;
+    }
+    columns.push({ key, label, instruction: instr });
+  }
+  if (hasError || !columns.length) {
+    if (!hasError) { errEl.textContent = "At least one column is required."; errEl.hidden = false; }
+    return;
+  }
+
+  setButtonLoading(btn, true, "Saving…");
+  try {
+    await apiFetch(`${API_REPORTS}/templates`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, description: desc, columns }),
+    });
+    toast(`Template "${name}" saved!`);
+    await loadReportTemplates();
+    // Reset form
+    document.getElementById("rtName").value = "";
+    document.getElementById("rtDesc").value = "";
+    resetColRows();
+    // Close the details
+    document.querySelector(".report-new-template")?.removeAttribute("open");
+  } catch (err) {
+    errEl.textContent = err.message;
+    errEl.hidden = false;
+  } finally {
+    setButtonLoading(btn, false);
+  }
+}
+
+function resetColRows() {
+  const container = document.getElementById("rtColumns");
+  if (!container) return;
+  container.innerHTML = `<div class="rt-col-row">
+    <input class="rt-col-key" type="text" placeholder="key (e.g. salary)" title="Unique identifier, no spaces" />
+    <input class="rt-col-label" type="text" placeholder="Column label (e.g. Salary)" />
+    <input class="rt-col-instr" type="text" placeholder="Instruction (e.g. Find the annual salary)" />
+    <button class="rt-remove-col icon-button" type="button" title="Remove column">✕</button>
+  </div>`;
+  // Wire the first row remove btn
+  container.querySelector(".rt-remove-col").addEventListener("click", () => {
+    toast("At least one column is required.", "error");
+  });
+}
+
+// ---------- Generate ----------
+
+function loadReportTemplatesIntoSelect() {
+  const sel = document.getElementById("genTemplateSelect");
+  if (!sel) return;
+  const prev = sel.value;
+  sel.innerHTML = "";
+  if (!tier2State.reportTemplates.length) {
+    sel.innerHTML = `<option value="">— No templates yet, create one first —</option>`;
+    return;
+  }
+  for (const t of tier2State.reportTemplates) {
+    const opt = document.createElement("option");
+    opt.value = t.id;
+    opt.textContent = `${t.name} (${t.columns?.length || 0} cols)`;
+    sel.appendChild(opt);
+  }
+  if (prev) sel.value = prev;
+}
+
+async function runReportGeneration() {
+  const templateId = document.getElementById("genTemplateSelect").value;
+  const exportFormat = document.getElementById("genFormatSelect").value;
+  const statusEl = document.getElementById("genStatus");
+  const genBtn = document.getElementById("genRunBtn");
+  statusEl.hidden = true;
+
+  if (!templateId) {
+    statusEl.textContent = "Please select a template first.";
+    statusEl.style.color = "var(--danger)";
+    statusEl.hidden = false;
+    return;
+  }
+
+  setButtonLoading(genBtn, true, "Starting…");
+  try {
+    const job = await apiFetch(`${API_REPORTS}/generate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ template_id: templateId, export_format: exportFormat }),
+    });
+
+    // Show success and switch to jobs tab immediately
+    statusEl.textContent = `✓ Job started! ID: ${job.id.slice(0, 8)}… Switching to Jobs tab…`;
+    statusEl.style.color = "var(--accent)";
+    statusEl.hidden = false;
+
+    // Track job ID for polling
+    tier2State.activeJobId = job.id;
+
+    setTimeout(() => {
+      switchReportTab("jobs");
+    }, 800);
+
+  } catch (err) {
+    statusEl.textContent = err.message;
+    statusEl.style.color = "var(--danger)";
+    statusEl.hidden = false;
+  } finally {
+    setButtonLoading(genBtn, false);
+  }
+}
+
+// ---------- Jobs ----------
+
+async function loadReportJobs(silent = false) {
+  const el = document.getElementById("jobsList");
+  if (!el) return;
+
+  if (!silent) {
+    el.innerHTML = `<div class="jobs-loading"><span class="spinner-sm"></span> Loading jobs…</div>`;
+  }
+
+  try {
+    const jobs = await apiFetch(`${API_REPORTS}`);
+    tier2State.reportJobs = jobs;
+    renderJobsList(jobs);
+  } catch (err) {
+    if (!silent) {
+      el.innerHTML = `<p class="inline-error">Failed to load jobs: ${escapeHtml(err.message)}</p>`;
+    }
+  }
+}
+
+function renderJobsList(jobs) {
+  const el = document.getElementById("jobsList");
+  if (!el) return;
+  el.innerHTML = "";
+
+  if (!jobs.length) {
+    el.innerHTML = `<div class="jobs-empty">
+      <div class="jobs-empty-icon">📋</div>
+      <p>No report jobs yet.</p>
+      <p style="color:var(--muted);font-size:12px">Go to the Generate tab to create your first report.</p>
+    </div>`;
+    return;
+  }
+
+  for (const job of jobs) {
+    const row = document.createElement("div");
+    row.className = "job-row";
+    row.dataset.jobId = job.id;
+
+    const ts = job.created_at ? new Date(job.created_at).toLocaleString() : "";
+    const completedTs = job.completed_at ? new Date(job.completed_at).toLocaleString() : null;
+
+    const statusConfig = {
+      done:       { cls: "job-status-done",       icon: "✅", label: "Done" },
+      failed:     { cls: "job-status-failed",      icon: "❌", label: "Failed" },
+      processing: { cls: "job-status-processing",  icon: "⚙️", label: "Processing…" },
+      pending:    { cls: "job-status-pending",      icon: "⏳", label: "Pending…" },
+    };
+    const sc = statusConfig[job.status] || { cls: "", icon: "❓", label: job.status };
+
+    row.innerHTML = `
+      <div class="job-info">
+        <div class="job-header-row">
+          <span class="job-status-badge ${sc.cls}">${sc.icon} ${sc.label}</span>
+          <strong class="job-template-name">${escapeHtml(job.template_name || "Report")}</strong>
+          <span class="job-format-badge">${escapeHtml(job.export_format?.toUpperCase() || "—")}</span>
+        </div>
+        <div class="job-meta">
+          <span>ID: <code>${job.id.slice(0, 12)}…</code></span>
+          <span>Started: ${ts}</span>
+          ${completedTs ? `<span>Finished: ${completedTs}</span>` : ""}
+        </div>
+        ${job.error_message ? `<div class="job-error-msg">⚠ ${escapeHtml(job.error_message)}</div>` : ""}
+      </div>
+      <div class="job-actions">
+        ${job.status === "done" ? `<button class="primary-button job-download-btn" data-id="${job.id}" data-fmt="${job.export_format}" type="button">⬇ Download</button>` : ""}
+        ${(job.status === "processing" || job.status === "pending") ? `<button class="secondary-button job-poll-btn" data-id="${job.id}" type="button">↻ Check</button>` : ""}
+      </div>
+    `;
+
+    row.querySelector(".job-download-btn")?.addEventListener("click", () => {
+      downloadReportFile(job.id, job.export_format);
+    });
+    row.querySelector(".job-poll-btn")?.addEventListener("click", () => {
+      pollSingleJob(job.id);
+    });
+
+    el.appendChild(row);
+  }
+}
+
+async function pollSingleJob(jobId) {
+  try {
+    const job = await apiFetch(`${API_REPORTS}/${jobId}`);
+    // Update this job in local state and re-render
+    const idx = tier2State.reportJobs.findIndex(j => j.id === jobId);
+    if (idx !== -1) tier2State.reportJobs[idx] = job;
+    else tier2State.reportJobs.unshift(job);
+    renderJobsList(tier2State.reportJobs);
+  } catch (err) {
+    toast(`Could not check job: ${err.message}`, "error");
+  }
+}
+
+function downloadReportFile(jobId, format) {
+  // Read token from the correct key
+  let token = "";
+  try { token = JSON.parse(localStorage.getItem("knowforge.auth.v1") || "{}").token || ""; } catch { }
+  const url = `${API_REPORTS}/${jobId}/download`;
+  fetch(url, { headers: { Authorization: `Bearer ${token}` } })
+    .then(res => {
+      if (!res.ok) return res.json().then(d => { throw new Error(d.detail?.message || "Download failed"); });
+      return res.blob();
+    })
+    .then(blob => {
+      const ext = format || "bin";
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `report_${jobId.slice(0, 8)}.${ext}`;
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 2000);
+      toast("Report downloaded!");
+    })
+    .catch(err => toast(err.message, "error"));
+}
+
+
+// =============================================================================
+// Patch renderWikiPages to inject "Versions" menu item
+// =============================================================================
+const _origRenderWikiPagesPatched = renderWikiPages;
+// Override by patching the wiki page click wiring after each render
+const _originalWikiPagesRender = window.renderWikiPages;
+
+// We inject Versions into the wiki page dropdown after it renders
+document.addEventListener("click", (e) => {
+  // If a "versions" action is clicked in the wiki menu
+  if (e.target?.classList?.contains("action-versions")) {
+    e.stopPropagation();
+    const slug = e.target.dataset.slug;
+    if (slug) openVersionsModal(slug);
+  }
+}, true);
+
+// Patch renderWikiPages to include Versions in menu (monkey-patch by wrapping)
+(function patchRenderWikiPages() {
+  const origRender = window.renderWikiPages;
+  if (!origRender) return;
+  window.renderWikiPages = function () {
+    origRender.apply(this, arguments);
+    // Inject Versions button into each wiki session-menu
+    document.querySelectorAll(".wiki-page-item .session-menu").forEach((menu) => {
+      const parentItem = menu.closest(".wiki-page-item");
+      const cardRow = parentItem?.querySelector(".wiki-card-row");
+      if (!cardRow) return;
+      // Read slug from the prefill click handler doesn't expose it easily
+      // Instead, find the title and match
+      const titleEl = cardRow.querySelector(".session-title");
+      const pageTitle = titleEl?.textContent;
+      const page = tier2State.workspaces.length
+        ? null  // slug extraction from state
+        : null;
+      if (!menu.querySelector(".action-versions")) {
+        // Find slug from state by title match
+        const pageData = (window._state?.wikiPages || []).find(p => p.title === pageTitle);
+        if (pageData?.slug) {
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.className = "session-action action-versions";
+          btn.dataset.slug = pageData.slug;
+          btn.textContent = "Versions";
+          menu.insertBefore(btn, menu.querySelector(".session-action.edit"));
+        }
+      }
+    });
+    // Wire Save-to-Wiki on assistant messages
+    document.querySelectorAll(".message-card").forEach((card) => {
+      const role = card.dataset.role;
+      if (role !== "assistant") return;
+      const btn = card.querySelector(".save-wiki-btn");
+      if (btn && btn.hidden && !btn.dataset.wired) {
+        btn.hidden = false;
+        btn.dataset.wired = "1";
+        const bodyEl = card.querySelector(".message-body");
+        btn.addEventListener("click", () => openSaveToWikiModal(bodyEl?.textContent || ""));
+      }
+    });
+  };
+})();
+
+// =============================================================================
+// Boot Tier 2 after auth
+// =============================================================================
+const _origBootstrapAuth = bootstrapAuth;
+async function bootstrapAuthTier2() {
+  await _origBootstrapAuth();
+  await loadWorkspaces();
+}
+// Re-wire save to wiki on every chat render
+const _origRenderChat = window.renderChat;
+if (_origRenderChat) {
+  window.renderChat = function() {
+    _origRenderChat.apply(this, arguments);
+    // Wire save-to-wiki for newly rendered assistant messages
+    document.querySelectorAll(".message-card[data-role='assistant']").forEach((card) => {
+      const btn = card.querySelector(".save-wiki-btn");
+      if (btn && !btn.dataset.wired) {
+        btn.hidden = false;
+        btn.dataset.wired = "1";
+        const bodyEl = card.querySelector(".message-body");
+        btn.addEventListener("click", () => openSaveToWikiModal(bodyEl?.textContent || ""));
+      }
+    });
+  };
+}
+
+// Initialize Tier 2
+bindTier2Events();
+loadWorkspaces();
