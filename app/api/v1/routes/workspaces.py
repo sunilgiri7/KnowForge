@@ -78,6 +78,17 @@ def switch_workspace_route(
     return _ws_out(ws, member.role if member else None)
 
 
+@router.post("/{workspace_id}/switch", response_model=WorkspaceOut)
+def switch_workspace_by_id_route(
+    workspace_id: str,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> WorkspaceOut:
+    ws = switch_workspace(db, user, workspace_id)
+    member = get_member(db, workspace_id=ws.id, user_id=user.id)
+    return _ws_out(ws, member.role if member else None)
+
+
 @router.get("/{workspace_id}/members", response_model=list[WorkspaceMemberOut])
 def list_members(
     workspace_id: str,

@@ -27,9 +27,7 @@ from app.services.chat_sessions import (
     session_item,
     thread_context_for_parent,
 )
-from app.services.llm_keys import get_user_llm_key_plaintext, get_user_llm_key
-from app.llm.providers.openrouter_llm import OpenRouterLlm
-from app.llm.providers.direct_llms import AnthropicLlm, GeminiLlm, OpenAILlm
+from app.services.llm_factory import build_user_llm
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
@@ -58,20 +56,7 @@ async def chat(
         parent_id=request.parent_id,
         interaction=request.interaction,
     )
-    user_llm = None
-    provider = (user.llm_active_provider or "openrouter").strip()
-    record = get_user_llm_key(db, user=user, provider=provider)
-    if record:
-        key = get_user_llm_key_plaintext(db, user=user, provider=provider)
-        if key:
-            if provider == "openrouter":
-                user_llm = OpenRouterLlm(api_key=key, model=(record.model or None))
-            elif provider == "openai":
-                user_llm = OpenAILlm(api_key=key, model=(record.model or "gpt-4o-mini"))
-            elif provider == "anthropic":
-                user_llm = AnthropicLlm(api_key=key, model=(record.model or "claude-3-5-sonnet-latest"))
-            elif provider == "gemini":
-                user_llm = GeminiLlm(api_key=key, model=(record.model or "gemini-2.0-flash"))
+    user_llm = build_user_llm(db, user)
     response = await ChatService(wiki_store_for_workspace(workspace), llm=user_llm).answer(request)
     add_message(
         db,
@@ -102,9 +87,10 @@ async def sessions(
 async def session_messages(
     session_id: str,
     user: Annotated[User, Depends(get_current_user)],
+    workspace: Annotated[Workspace, Depends(get_active_workspace_dep)],
     db: Annotated[Session, Depends(get_db)],
 ) -> ChatSessionMessages:
-    return get_session_messages(db, user, session_id)
+    return get_session_messages(db, user, session_id, workspace.id)
 
 
 @router.patch("/sessions/{session_id}", response_model=ChatSessionItem)
@@ -112,9 +98,10 @@ async def update_session(
     session_id: str,
     request: ChatSessionUpdate,
     user: Annotated[User, Depends(get_current_user)],
+    workspace: Annotated[Workspace, Depends(get_active_workspace_dep)],
     db: Annotated[Session, Depends(get_db)],
 ) -> ChatSessionItem:
-    session = rename_session_title(db, user, session_id, request.title)
+    session = rename_session_title(db, user, session_id, request.title, workspace.id)
     return session_item(session)
 
 

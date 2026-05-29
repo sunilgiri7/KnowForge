@@ -1,11 +1,10 @@
 """
 routes/reports.py — Report template CRUD + generate + download.
 
-Fixes:
-  - Added GET /reports (list all jobs for workspace)
-  - BackgroundTask uses its own independent DB session (not the request session)
-  - GroqClient uses user's stored LLM key via db lookup
-  - Proper error propagation to job.error_message
+Notes:
+  - Background tasks use an independent DB session.
+  - Report extraction uses the user's active LLM provider, same as chat.
+  - Provider failures are surfaced through job.error_message instead of blank exports.
 """
 from __future__ import annotations
 
@@ -21,7 +20,6 @@ from app.api.deps import get_active_workspace_dep, get_current_user, wiki_store_
 from app.core.errors import KnowForgeError
 from app.db.models import ReportJob, ReportTemplate, User, Workspace
 from app.db.session import SessionLocal, get_db
-from app.llmwiki.groq import GroqClient
 from app.llmwiki.reports import ReportRunner
 from app.schemas.workspace import (
     ExtractedRow,
@@ -30,7 +28,7 @@ from app.schemas.workspace import (
     ReportTemplateCreate,
     ReportTemplateOut,
 )
-from app.services.llm_keys import get_user_llm_key_plaintext, get_user_llm_model
+from app.services.llm_factory import build_user_llm
 from app.services.workspace import get_member, require_role
 
 router = APIRouter(prefix="/reports", tags=["reports"])
@@ -76,18 +74,12 @@ def _job_out(j: ReportJob, template_name: str | None = None) -> ReportJobOut:
     )
 
 
-def _get_user_llm_client(db: Session, user_id: str) -> GroqClient:
-    """Get a GroqClient using the user's stored API key (any provider)."""
-    from app.db.models import User
+def _get_user_llm_client(db: Session, user_id: str):
+    """Build the same active-provider LLM client used by chat."""
     user = db.get(User, user_id)
     if not user:
-        return GroqClient()
-    provider = user.llm_active_provider or "groq"
-    api_key = get_user_llm_key_plaintext(db, user=user, provider=provider)
-    model = get_user_llm_model(db, user=user, provider=provider)
-    if api_key:
-        return GroqClient(api_key=api_key, model=model or None)
-    return GroqClient()
+        return None
+    return build_user_llm(db, user)
 
 
 async def _run_job_in_background(
@@ -263,12 +255,6 @@ async def generate_report(
     if not template or template.workspace_id != workspace.id:
         raise KnowForgeError("Template not found.", status_code=404, code="template_not_found")
 
-    # Override scope slugs for this run if provided
-    if payload.scope_slugs:
-        template_scope = json.dumps(payload.scope_slugs)
-    else:
-        template_scope = template.scope_slugs_json
-
     # Create the job record
     job = ReportJob(
         id=str(uuid.uuid4()),
@@ -276,6 +262,7 @@ async def generate_report(
         template_id=payload.template_id,
         export_format=payload.export_format,
         created_by=user.id,
+        scope_slugs_json=json.dumps(payload.scope_slugs) if payload.scope_slugs else None,
         status="pending",
     )
     db.add(job)

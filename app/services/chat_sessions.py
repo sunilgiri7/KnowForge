@@ -107,7 +107,17 @@ def list_user_sessions(db: Session, user: User, workspace_id: str | None = None)
     return [session_item(session) for session in sessions]
 
 
-def get_session_messages(db: Session, user: User, session_id: str) -> ChatSessionMessages:
+def _assert_session_workspace(session: ChatSession, workspace_id: str | None) -> None:
+    if workspace_id and session.workspace_id not in {workspace_id, None}:
+        raise KnowForgeError("Chat session not found.", status_code=404, code="session_not_found")
+
+
+def get_session_messages(
+    db: Session,
+    user: User,
+    session_id: str,
+    workspace_id: str | None = None,
+) -> ChatSessionMessages:
     session = db.scalar(
         select(ChatSession)
         .options(selectinload(ChatSession.messages))
@@ -115,6 +125,7 @@ def get_session_messages(db: Session, user: User, session_id: str) -> ChatSessio
     )
     if not session:
         raise KnowForgeError("Chat session not found.", status_code=404, code="session_not_found")
+    _assert_session_workspace(session, workspace_id)
     return ChatSessionMessages(
         session=session_item(session),
         messages=[
@@ -195,22 +206,35 @@ def compact_session_if_needed(db: Session, session: ChatSession) -> None:
     session.summary = "\n".join(f"{record.role}: {record.content[:500]}" for record in recent)
 
 
-def delete_session(db: Session, user: User, session_id: str) -> None:
+def delete_session(
+    db: Session,
+    user: User,
+    session_id: str,
+    workspace_id: str | None = None,
+) -> None:
     session = db.scalar(
         select(ChatSession).where(ChatSession.id == session_id, ChatSession.user_id == user.id)
     )
     if not session:
         raise KnowForgeError("Chat session not found.", status_code=404, code="session_not_found")
+    _assert_session_workspace(session, workspace_id)
     db.delete(session)
     db.commit()
 
 
-def rename_session_title(db: Session, user: User, session_id: str, title: str) -> ChatSession:
+def rename_session_title(
+    db: Session,
+    user: User,
+    session_id: str,
+    title: str,
+    workspace_id: str | None = None,
+) -> ChatSession:
     session = db.scalar(
         select(ChatSession).where(ChatSession.id == session_id, ChatSession.user_id == user.id)
     )
     if not session:
         raise KnowForgeError("Chat session not found.", status_code=404, code="session_not_found")
+    _assert_session_workspace(session, workspace_id)
     session.title = title.strip()[:180] or session.title
     db.commit()
     return session

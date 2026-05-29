@@ -13,16 +13,16 @@ import io
 import json
 import uuid
 from datetime import UTC, datetime
-from pathlib import Path
+from html import escape
 from typing import Any
 
 from sqlalchemy.orm import Session
 
 from app.db.models import ReportJob, ReportTemplate
-from app.llmwiki.groq import GroqClient
 from app.llmwiki.storage import WikiStore
 from app.llmwiki.text import safe_format, trim_to_chars
 from app.schemas.workspace import ExtractedCell, ExtractedRow, ReportColumnDef
+from app.services.llm_factory import JsonLlm
 
 
 # ---------------------------------------------------------------------------
@@ -68,9 +68,26 @@ Columns to answer:
 
 
 class ReportExtractor:
-    def __init__(self, store: WikiStore, llm: GroqClient | None = None):
+    def __init__(self, store: WikiStore, llm: JsonLlm | None = None):
         self.store = store
-        self.llm = llm or GroqClient()
+        self.llm = llm
+
+    @staticmethod
+    def _normalise_cell(raw: Any, *, slug: str) -> ExtractedCell:
+        if isinstance(raw, dict):
+            confidence = raw.get("confidence", 0.0)
+            try:
+                confidence_float = float(confidence)
+            except (TypeError, ValueError):
+                confidence_float = 0.0
+            confidence_float = max(0.0, min(1.0, confidence_float))
+            return ExtractedCell(
+                value=str(raw.get("value", "") or ""),
+                confidence=confidence_float,
+                source_slug=slug,
+                quote=str(raw.get("quote", "") or "") or None,
+            )
+        return ExtractedCell(value=str(raw or ""), confidence=0.4 if raw else 0.0, source_slug=slug)
 
     async def extract_page(
         self,
@@ -90,34 +107,28 @@ class ReportExtractor:
 
         cells: dict[str, ExtractedCell] = {}
 
-        if self.llm.available:
-            try:
-                raw = await self.llm.generate_json(
-                    safe_format(
-                        EXTRACTION_PROMPT,
-                        columns_spec=columns_spec,
-                        title=page.meta.title,
-                        content=trim_to_chars(page.content, 8000),
-                    ),
-                    temperature=0.05,
-                )
-                for col in columns:
-                    cell_raw = raw.get(col.key, {})
-                    if isinstance(cell_raw, dict):
-                        cells[col.key] = ExtractedCell(
-                            value=str(cell_raw.get("value", "")),
-                            confidence=float(cell_raw.get("confidence", 0.0)),
-                            source_slug=slug,
-                            quote=str(cell_raw.get("quote", "")) or None,
-                        )
-                    else:
-                        cells[col.key] = ExtractedCell(value=str(cell_raw), source_slug=slug)
-            except Exception:
-                for col in columns:
-                    cells[col.key] = ExtractedCell(value="", confidence=0.0, source_slug=slug)
-        else:
-            for col in columns:
-                cells[col.key] = ExtractedCell(value="", confidence=0.0, source_slug=slug)
+        if not self.llm or not self.llm.available:
+            raise ReportGenerationError(
+                "Sorry, the AI report extractor is not connected. Please connect an LLM provider and try again."
+            )
+        try:
+            raw = await self.llm.generate_json(
+                safe_format(
+                    EXTRACTION_PROMPT,
+                    columns_spec=columns_spec,
+                    title=page.meta.title,
+                    content=trim_to_chars(page.content, 8000),
+                ),
+                temperature=0.05,
+            )
+        except Exception as exc:
+            raise ReportGenerationError(
+                "Sorry, the AI report extractor could not process this wiki page right now. "
+                "Please try again or switch/check your LLM provider."
+            ) from exc
+
+        for col in columns:
+            cells[col.key] = self._normalise_cell(raw.get(col.key, {}), slug=slug)
 
         return ExtractedRow(page_slug=slug, page_title=page.meta.title, cells=cells)
 
@@ -133,32 +144,26 @@ class ReportExtractor:
 
         cells: dict[str, ExtractedCell] = {}
 
-        if self.llm.available:
-            try:
-                raw = await self.llm.generate_json(
-                    safe_format(
-                        KNOWLEDGE_EXTRACTION_PROMPT,
-                        columns_spec=columns_spec,
-                    ),
-                    temperature=0.3,
-                )
-                for col in columns:
-                    cell_raw = raw.get(col.key, {})
-                    if isinstance(cell_raw, dict):
-                        cells[col.key] = ExtractedCell(
-                            value=str(cell_raw.get("value", "")),
-                            confidence=float(cell_raw.get("confidence", 0.0)),
-                            source_slug="llm_knowledge",
-                            quote=None,
-                        )
-                    else:
-                        cells[col.key] = ExtractedCell(value=str(cell_raw), source_slug="llm_knowledge")
-            except Exception:
-                for col in columns:
-                    cells[col.key] = ExtractedCell(value="", confidence=0.0, source_slug="llm_knowledge")
-        else:
-            for col in columns:
-                cells[col.key] = ExtractedCell(value="", confidence=0.0, source_slug="llm_knowledge")
+        if not self.llm or not self.llm.available:
+            raise ReportGenerationError(
+                "Sorry, the AI report extractor is not connected. Please connect an LLM provider and try again."
+            )
+        try:
+            raw = await self.llm.generate_json(
+                safe_format(
+                    KNOWLEDGE_EXTRACTION_PROMPT,
+                    columns_spec=columns_spec,
+                ),
+                temperature=0.3,
+            )
+        except Exception as exc:
+            raise ReportGenerationError(
+                "Sorry, the AI report extractor could not process this report right now. "
+                "Please try again or switch/check your LLM provider."
+            ) from exc
+
+        for col in columns:
+            cells[col.key] = self._normalise_cell(raw.get(col.key, {}), slug="llm_knowledge")
 
         return ExtractedRow(page_slug="llm_knowledge", page_title="LLM Internal Knowledge", cells=cells)
 
@@ -175,6 +180,7 @@ def export_xlsx(rows: list[ExtractedRow], columns: list[ReportColumnDef]) -> byt
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Report"
+    evidence_ws = wb.create_sheet("Evidence")
 
     # Header row
     headers = ["Page", "Title"] + [col.label for col in columns]
@@ -205,6 +211,28 @@ def export_xlsx(rows: list[ExtractedRow], columns: list[ReportColumnDef]) -> byt
     for col_cells in ws.columns:
         max_len = max((len(str(c.value or "")) for c in col_cells), default=10)
         ws.column_dimensions[col_cells[0].column_letter].width = min(max_len + 4, 50)
+
+    evidence_headers = ["Page", "Title", "Column", "Value", "Confidence", "Source Quote"]
+    for col_idx, header in enumerate(evidence_headers, start=1):
+        cell = evidence_ws.cell(row=1, column=col_idx, value=header)
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = Alignment(wrap_text=True, vertical="center")
+    evidence_row = 2
+    for row in rows:
+        for col in columns:
+            cell_data = row.cells.get(col.key)
+            evidence_ws.cell(row=evidence_row, column=1, value=row.page_slug)
+            evidence_ws.cell(row=evidence_row, column=2, value=row.page_title)
+            evidence_ws.cell(row=evidence_row, column=3, value=col.label)
+            evidence_ws.cell(row=evidence_row, column=4, value=cell_data.value if cell_data else "")
+            evidence_ws.cell(row=evidence_row, column=5, value=cell_data.confidence if cell_data else 0.0)
+            evidence_ws.cell(row=evidence_row, column=6, value=cell_data.quote if cell_data else "")
+            evidence_ws.cell(row=evidence_row, column=6).alignment = Alignment(wrap_text=True)
+            evidence_row += 1
+    for col_cells in evidence_ws.columns:
+        max_len = max((len(str(c.value or "")) for c in col_cells), default=10)
+        evidence_ws.column_dimensions[col_cells[0].column_letter].width = min(max_len + 4, 70)
 
     buf = io.BytesIO()
     wb.save(buf)
@@ -266,14 +294,16 @@ def export_pdf(
 ) -> bytes:
     import weasyprint
 
-    col_headers = "".join(f"<th>{col.label}</th>" for col in columns)
+    col_headers = "".join(f"<th>{escape(col.label)}</th>" for col in columns)
     data_rows_html = ""
     for row in rows:
         cells_html = "".join(
-            f"<td>{row.cells.get(col.key, ExtractedCell(value='')).value}</td>"
+            f"<td>{escape(row.cells.get(col.key, ExtractedCell(value='')).value)}</td>"
             for col in columns
         )
-        data_rows_html += f"<tr><td>{row.page_slug}</td><td>{row.page_title}</td>{cells_html}</tr>"
+        data_rows_html += (
+            f"<tr><td>{escape(row.page_slug)}</td><td>{escape(row.page_title)}</td>{cells_html}</tr>"
+        )
 
     html = f"""<!DOCTYPE html>
 <html>
@@ -290,7 +320,7 @@ def export_pdf(
 </style>
 </head>
 <body>
-<h1>{template_name}</h1>
+<h1>{escape(template_name)}</h1>
 <p class="meta">Generated: {datetime.now(UTC).strftime('%Y-%m-%d %H:%M UTC')}</p>
 <table>
   <thead><tr><th>Page</th><th>Title</th>{col_headers}</tr></thead>
@@ -308,10 +338,10 @@ def export_pdf(
 
 
 class ReportRunner:
-    def __init__(self, db: Session, store: WikiStore, llm: GroqClient | None = None):
+    def __init__(self, db: Session, store: WikiStore, llm: JsonLlm | None = None):
         self.db = db
         self.store = store
-        self.llm = llm or GroqClient()
+        self.llm = llm
 
     async def run(self, job: ReportJob) -> ReportJob:
         job.status = "processing"
@@ -323,7 +353,11 @@ class ReportRunner:
                 raise ValueError(f"Template {job.template_id} not found")
 
             columns = [ReportColumnDef(**c) for c in json.loads(template.columns_json)]
-            scope_slugs = json.loads(template.scope_slugs_json or "[]")
+            scope_slugs = json.loads(
+                job.scope_slugs_json
+                if job.scope_slugs_json is not None
+                else (template.scope_slugs_json or "[]")
+            )
 
             extractor = ReportExtractor(self.store, self.llm)
             rows: list[ExtractedRow] = []
@@ -335,6 +369,11 @@ class ReportRunner:
             else:
                 row = await extractor.extract_without_context(columns=columns)
                 rows.append(row)
+
+            if not rows:
+                raise ReportGenerationError(
+                    "No selected wiki pages could be read for this report. Please update the template scope and try again."
+                )
 
             job.results_json = json.dumps([r.model_dump() for r in rows])
 
@@ -383,3 +422,7 @@ class ReportRunner:
         self.db.commit()
         self.db.refresh(job)
         return job
+
+
+class ReportGenerationError(RuntimeError):
+    pass

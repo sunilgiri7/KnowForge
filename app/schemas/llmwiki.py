@@ -23,7 +23,7 @@ class WikiPageMeta(BaseModel):
     summary: str = ""
     tags: list[str] = Field(default_factory=list)
     source_ids: list[str] = Field(default_factory=list)
-    freshness: Literal["current", "stale", "unknown"] = "current"
+    freshness: Literal["current", "stale", "superseded", "unknown"] = "current"
     confidence: Literal["high", "medium", "low"] = "medium"
     aliases: list[str] = Field(default_factory=list)
     entities: list[str] = Field(default_factory=list)

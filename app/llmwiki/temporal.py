@@ -206,6 +206,7 @@ class SupersessionDetector:
 
     def __init__(self, db: Session):
         self.db = db
+        self.best_score = 0.0
 
     def find_superseded_page(
         self,
@@ -241,6 +242,7 @@ class SupersessionDetector:
                 best_score = combined
                 best_slug = old_page.meta.slug
 
+        self.best_score = best_score
         return best_slug
 
     def record_supersession(

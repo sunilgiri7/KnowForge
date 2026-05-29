@@ -382,6 +382,8 @@ class ReportJob(Base):
     status: Mapped[str] = mapped_column(String(20), default="pending", nullable=False)
     # JSON: list of extracted row dicts {col_key: {value, confidence, source_slug, quote}}
     results_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Optional JSON list of slugs chosen for this specific run.
+    scope_slugs_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Relative path under storage root for the exported file
     file_path: Mapped[str | None] = mapped_column(String(512), nullable=True)

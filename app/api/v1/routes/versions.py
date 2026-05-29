@@ -9,13 +9,14 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_active_workspace_dep, get_current_user, wiki_store_for_workspace
+from app.api.deps import get_active_workspace_dep, get_current_user
 from app.core.errors import KnowForgeError
 from app.db.models import User, Workspace
 from app.db.session import get_db
-from app.llmwiki.groq import GroqClient
 from app.llmwiki.temporal import WikiVersionLedger, compute_semantic_diff
 from app.schemas.workspace import WikiDiffHunk, WikiSemanticDiff, WikiVersionDetail, WikiVersionListItem
+from app.services.llm_factory import build_user_llm
+from app.services.workspace import get_member, require_role
 
 router = APIRouter(prefix="/wiki", tags=["wiki-versions"])
 
@@ -27,6 +28,7 @@ def list_page_versions(
     workspace: Annotated[Workspace, Depends(get_active_workspace_dep)],
     db: Annotated[Session, Depends(get_db)],
 ) -> list[WikiVersionListItem]:
+    require_role(get_member(db, workspace_id=workspace.id, user_id=user.id), "viewer")
     ledger = WikiVersionLedger(db)
     _, versions = ledger.get_versions(workspace_id=workspace.id, slug=slug)
     return [
@@ -51,6 +53,7 @@ def get_page_version(
     workspace: Annotated[Workspace, Depends(get_active_workspace_dep)],
     db: Annotated[Session, Depends(get_db)],
 ) -> WikiVersionDetail:
+    require_role(get_member(db, workspace_id=workspace.id, user_id=user.id), "viewer")
     ledger = WikiVersionLedger(db)
     v = ledger.get_version_by_number(
         workspace_id=workspace.id, slug=slug, version_number=version_number
@@ -81,6 +84,7 @@ async def get_page_diff(
     from_version: int = Query(..., alias="from"),
     to_version: int = Query(..., alias="to"),
 ) -> WikiSemanticDiff:
+    require_role(get_member(db, workspace_id=workspace.id, user_id=user.id), "viewer")
     ledger = WikiVersionLedger(db)
     v_from = ledger.get_version_by_number(
         workspace_id=workspace.id, slug=slug, version_number=from_version
@@ -91,7 +95,7 @@ async def get_page_diff(
     if not v_from or not v_to:
         raise KnowForgeError("One or both versions not found.", status_code=404, code="version_not_found")
 
-    llm = GroqClient()
+    llm = build_user_llm(db, user)
     diff_data = await compute_semantic_diff(
         old_content=v_from.content,
         new_content=v_to.content,

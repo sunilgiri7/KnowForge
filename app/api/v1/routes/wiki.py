@@ -1,13 +1,17 @@
 from typing import Annotated
 
 from fastapi import APIRouter, Depends
+from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, wiki_store_for_workspace, get_active_workspace_dep
 from app.db.models import User, Workspace
+from app.db.session import get_db
 from app.llmwiki.compaction import WikiCompactor
 from app.llmwiki.contradictions import ContradictionStore
+from app.llmwiki.temporal import WikiVersionLedger
 from app.llmwiki.text import slugify
 from app.schemas.llmwiki import WikiPage, WikiPageListItem, WikiPageRename, WikiPageUpsert
+from app.services.workspace import get_member, require_role
 
 router = APIRouter(prefix="/wiki", tags=["wiki"])
 
@@ -16,7 +20,9 @@ router = APIRouter(prefix="/wiki", tags=["wiki"])
 async def read_index(
     workspace: Annotated[Workspace, Depends(get_active_workspace_dep)],
     user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
 ) -> dict[str, str]:
+    require_role(get_member(db, workspace_id=workspace.id, user_id=user.id), "viewer")
     store = wiki_store_for_workspace(workspace)
     return {"index": store.read_index()}
 
@@ -25,7 +31,9 @@ async def read_index(
 async def list_pages(
     workspace: Annotated[Workspace, Depends(get_active_workspace_dep)],
     user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
 ) -> list[WikiPageListItem]:
+    require_role(get_member(db, workspace_id=workspace.id, user_id=user.id), "viewer")
     store = wiki_store_for_workspace(workspace)
     pages = store.list_pages()
     conflict_counts = ContradictionStore(store).open_count_by_slug()
@@ -42,7 +50,9 @@ async def read_page(
     slug: str,
     workspace: Annotated[Workspace, Depends(get_active_workspace_dep)],
     user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
 ) -> WikiPage:
+    require_role(get_member(db, workspace_id=workspace.id, user_id=user.id), "viewer")
     return wiki_store_for_workspace(workspace).read_page(slug)
 
 
@@ -52,7 +62,9 @@ async def upsert_page(
     payload: WikiPageUpsert,
     workspace: Annotated[Workspace, Depends(get_active_workspace_dep)],
     user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
 ) -> WikiPage:
+    require_role(get_member(db, workspace_id=workspace.id, user_id=user.id), "editor")
     store = wiki_store_for_workspace(workspace)
     page = store.make_page(
         title=payload.title,
@@ -65,7 +77,14 @@ async def upsert_page(
         content=payload.content,
         confidence="high",
     )
-    return store.upsert_page(page)
+    saved = store.upsert_page(page)
+    WikiVersionLedger(db).record_version(
+        page=saved,
+        workspace_id=workspace.id,
+        created_by=user.id,
+        created_reason="manual_edit",
+    )
+    return saved
 
 
 @router.patch("/pages/{slug:path}", response_model=WikiPage)
@@ -74,8 +93,17 @@ async def rename_page(
     payload: WikiPageRename,
     workspace: Annotated[Workspace, Depends(get_active_workspace_dep)],
     user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
 ) -> WikiPage:
-    return wiki_store_for_workspace(workspace).rename_page(slug, payload.title)
+    require_role(get_member(db, workspace_id=workspace.id, user_id=user.id), "editor")
+    page = wiki_store_for_workspace(workspace).rename_page(slug, payload.title)
+    WikiVersionLedger(db).record_version(
+        page=page,
+        workspace_id=workspace.id,
+        created_by=user.id,
+        created_reason="rename",
+    )
+    return page
 
 
 @router.delete("/pages/{slug:path}", response_model=dict[str, bool])
@@ -83,7 +111,9 @@ async def delete_page(
     slug: str,
     workspace: Annotated[Workspace, Depends(get_active_workspace_dep)],
     user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
 ) -> dict[str, bool]:
+    require_role(get_member(db, workspace_id=workspace.id, user_id=user.id), "editor")
     wiki_store_for_workspace(workspace).delete_page(slug)
     return {"deleted": True}
 
@@ -92,7 +122,9 @@ async def delete_page(
 async def compact_pages(
     workspace: Annotated[Workspace, Depends(get_active_workspace_dep)],
     user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
 ) -> dict[str, int]:
+    require_role(get_member(db, workspace_id=workspace.id, user_id=user.id), "editor")
     store = wiki_store_for_workspace(workspace)
     compactor = WikiCompactor(store)
     count = 0
