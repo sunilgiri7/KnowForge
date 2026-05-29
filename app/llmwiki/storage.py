@@ -66,6 +66,8 @@ class WikiStore:
                     freshness=page.meta.freshness,
                     confidence=page.meta.confidence,
                     source_ids=page.meta.source_ids,
+                    entity_count=len(page.meta.entities),
+                    related_count=len(page.meta.related_slugs),
                 )
             )
         return pages

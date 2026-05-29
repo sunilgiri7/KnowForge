@@ -25,7 +25,7 @@ class Settings(BaseSettings):
     api_v1_prefix: str = "/api/v1"
 
     groq_api_key: str | None = None
-    groq_model: str = "openai/gpt-oss-120b"
+    groq_model: str = "llama-3.3-70b-versatile"
     groq_timeout_seconds: float = 40.0
     groq_max_completion_tokens: int = 2048
     groq_compile_max_completion_tokens: int = 6000  # higher limit for wiki compilation
@@ -50,6 +50,11 @@ class Settings(BaseSettings):
     kg_max_hops_hard: int = 2
     kg_max_pages_in_context: int = 6
     kg_planner_subquestions: int = 3
+
+    contradiction_max_pairs_per_scan: int = 24
+    contradiction_excerpt_chars: int = 4_500
+    contradiction_scan_after_ingest: bool = True
+    contradiction_ingest_max_pairs: int = 8
 
     db_host: str = "localhost"
     db_port: int = 5432

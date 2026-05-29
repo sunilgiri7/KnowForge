@@ -8,6 +8,7 @@ const API = {
   sessions: "/api/v1/chat/sessions",
   upload: "/api/v1/sources/upload",
   wikiPages: "/api/v1/wiki/pages",
+  contradictions: "/api/v1/wiki/contradictions",
   compact: "/api/v1/wiki/compact",
   llmKeys: "/api/v1/llm/keys",
 };
@@ -42,6 +43,10 @@ const state = {
   sending: false,
   thinkingTimers: new Map(),
   wikiPages: [],
+  contradictions: [],
+  scanningConflicts: false,
+  wikiInsightSlug: null,
+  pendingWikiContextSlug: null,
   openWikiMenuSlug: null,
   editingWikiSlug: null,
   editingWikiTitle: "",
@@ -81,6 +86,13 @@ const els = {
   uploadError: document.querySelector("#uploadError"),
   wikiList: document.querySelector("#wikiList"),
   emptyWiki: document.querySelector("#emptyWiki"),
+  conflictsList: document.querySelector("#conflictsList"),
+  emptyConflicts: document.querySelector("#emptyConflicts"),
+  scanConflictsBtn: document.querySelector("#scanConflictsBtn"),
+  wikiInsightModal: document.querySelector("#wikiInsightModal"),
+  wikiInsightCloseBtn: document.querySelector("#wikiInsightCloseBtn"),
+  wikiInsightTitle: document.querySelector("#wikiInsightTitle"),
+  wikiInsightBody: document.querySelector("#wikiInsightBody"),
   sessionList: document.querySelector("#sessionList"),
   emptySessions: document.querySelector("#emptySessions"),
   refreshWikiBtn: document.querySelector("#refreshWikiBtn"),
@@ -545,7 +557,7 @@ async function bootstrapAuth() {
   try {
     state.user = await apiFetch(API.me);
     showApp(true);
-    await Promise.all([loadWikiPages(), loadSessions(), loadLlmStatus()]);
+    await Promise.all([loadWikiPages(), loadSessions(), loadLlmStatus(), loadConflicts()]);
     
     const savedSessionId = localStorage.getItem(ACTIVE_SESSION_KEY);
     if (savedSessionId && state.sessions.some((s) => s.id === savedSessionId)) {
@@ -620,6 +632,16 @@ async function sendMessage(content, options = {}) {
   renderChat();
   startThinking(assistantId);
 
+  const contextPageSlugs = options.contextPageSlugs?.length
+    ? options.contextPageSlugs
+    : state.pendingWikiContextSlug
+      ? [state.pendingWikiContextSlug]
+      : [];
+  const wikiIntent = options.intent || (contextPageSlugs.length ? "wiki" : "auto");
+  if (!options.keepWikiContext) {
+    state.pendingWikiContextSlug = null;
+  }
+
   try {
     const response = await apiFetch(API.chat, {
       method: "POST",
@@ -630,8 +652,8 @@ async function sendMessage(content, options = {}) {
         session_id: state.currentSessionId,
         parent_id: parentId,
         interaction,
-        context_page_slugs: options.contextPageSlugs || [],
-        intent: options.intent || "auto",
+        context_page_slugs: contextPageSlugs,
+        intent: wikiIntent,
         allow_fallback: true,
       }),
     });
@@ -641,6 +663,9 @@ async function sendMessage(content, options = {}) {
       pending: false,
       citations: response.citations || [],
       usedPages: response.used_pages || [],
+      agentTrace: response.agent_trace || [],
+      route: response.route,
+      difficulty: response.difficulty,
     });
     await loadSessions();
     if (state.currentSessionId) await loadSession(state.currentSessionId, { silent: true });
@@ -730,8 +755,23 @@ function renderMessageNode(message, children, depth) {
   node.querySelector(".comment-btn").addEventListener("click", () => setReplyMode(message.id, true));
 
   const meta = node.querySelector(".message-meta-row");
+  meta.innerHTML = "";
   if (message.citations?.length) meta.appendChild(chip(`${message.citations.length} citation(s)`));
-  else meta.remove();
+  if (message.usedPages?.length) {
+    for (const slug of message.usedPages) {
+      const pageChip = document.createElement("button");
+      pageChip.type = "button";
+      pageChip.className = "meta-chip meta-chip-link";
+      pageChip.textContent = slug;
+      pageChip.title = "Open wiki insight";
+      pageChip.addEventListener("click", () => openWikiInsight(slug));
+      meta.appendChild(pageChip);
+    }
+  }
+  if (message.agentTrace?.length) {
+    meta.appendChild(buildRetrievalInsight(message));
+  }
+  if (!meta.childElementCount) meta.remove();
 
   const thread = node.querySelector(".comment-thread");
   const childItems = children.get(message.id) || [];
@@ -945,13 +985,188 @@ function confirmDeleteSession(sessionId) {
   });
 }
 
+function buildRetrievalInsight(message) {
+  const wrap = document.createElement("details");
+  wrap.className = "retrieval-insight";
+  const summary = document.createElement("summary");
+  summary.textContent = "How this answer was retrieved";
+  const list = document.createElement("ul");
+  for (const trace of message.agentTrace) {
+    if (!trace?.agent || !trace?.action) continue;
+    const li = document.createElement("li");
+    const label = `${trace.agent} · ${trace.action}`;
+    li.innerHTML = `<strong>${escapeHtml(label)}</strong>`;
+    if (trace.notes) {
+      const notes = document.createElement("span");
+      notes.textContent = trace.notes;
+      li.appendChild(notes);
+    }
+    if (trace.agent === "knowledge_graph" || trace.agent === "planner") {
+      li.classList.add("trace-highlight");
+    }
+    list.appendChild(li);
+  }
+  if (message.route) {
+    const routeLi = document.createElement("li");
+    routeLi.innerHTML = `<strong>route</strong> <span>${escapeHtml(message.route)} (${escapeHtml(message.difficulty || "easy")})</span>`;
+    list.prepend(routeLi);
+  }
+  wrap.appendChild(summary);
+  wrap.appendChild(list);
+  return wrap;
+}
+
 function prefillWikiPrompt(page) {
-  const prompt = `Summarize the wiki page "${page.slug}" and explain what it is useful for.`;
+  state.pendingWikiContextSlug = page.slug;
+  const label = page.title || page.slug;
+  const prompt = `Summarize "${label}" and Summarize what it is useful for.`;
   els.messageInput.value = prompt;
   resizeTextarea();
   els.messageInput.focus();
   state.openWikiMenuSlug = null;
   renderWikiPages();
+  toast(`Wiki context set: ${label}`);
+}
+
+async function openWikiInsight(slug) {
+  state.wikiInsightSlug = slug;
+  els.wikiInsightModal.hidden = false;
+  els.wikiInsightBody.innerHTML = `<p class="empty-mini">Loading…</p>`;
+  try {
+    const page = await apiFetch(`${API.wikiPages}/${slug}`);
+    renderWikiInsight(page);
+  } catch (error) {
+    els.wikiInsightBody.innerHTML = `<p class="inline-error">${escapeHtml(error.message)}</p>`;
+  }
+}
+
+function closeWikiInsight() {
+  els.wikiInsightModal.hidden = true;
+  state.wikiInsightSlug = null;
+}
+
+function renderWikiInsight(page) {
+  const meta = page.meta || {};
+  els.wikiInsightTitle.textContent = meta.title || page.slug;
+  const entities = meta.entities || [];
+  const related = meta.related_slugs || [];
+  const entityHtml = entities.length
+    ? entities.map((e) => `<span class="entity-chip">${escapeHtml(e)}</span>`).join("")
+    : `<span class="muted-text">No entities indexed yet.</span>`;
+  const relatedHtml = related.length
+    ? related
+        .map((relSlug) => {
+          const match = state.wikiPages.find((p) => p.slug === relSlug);
+          const label = match?.title || relSlug;
+          return `<button type="button" class="related-link" data-slug="${escapeHtml(relSlug)}">${escapeHtml(label)}</button>`;
+        })
+        .join("")
+    : `<span class="muted-text">No linked pages yet.</span>`;
+
+  els.wikiInsightBody.innerHTML = `
+    <p class="wiki-insight-summary">${escapeHtml(meta.summary || "")}</p>
+    <div class="wiki-insight-section">
+      <h3>Knowledge graph</h3>
+      <div class="entity-chip-row">${entityHtml}</div>
+    </div>
+    <div class="wiki-insight-section">
+      <h3>Related pages</h3>
+      <div class="related-link-row">${relatedHtml}</div>
+    </div>
+    <div class="wiki-insight-actions">
+      <button type="button" class="secondary-button" id="wikiInsightAskBtn">Ask about this page</button>
+    </div>
+  `;
+  els.wikiInsightBody.querySelectorAll(".related-link").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const target = btn.getAttribute("data-slug");
+      if (target) openWikiInsight(target);
+    });
+  });
+  els.wikiInsightBody.querySelector("#wikiInsightAskBtn")?.addEventListener("click", () => {
+    closeWikiInsight();
+    prefillWikiPrompt({ slug: meta.slug, title: meta.title });
+  });
+}
+
+async function loadConflicts() {
+  try {
+    state.contradictions = await apiFetch(`${API.contradictions}?open_only=true`);
+  } catch {
+    state.contradictions = [];
+  }
+  renderConflicts();
+  renderWikiPages();
+}
+
+function renderConflicts() {
+  if (!els.conflictsList) return;
+  els.conflictsList.innerHTML = "";
+  els.emptyConflicts.hidden = state.contradictions.length > 0;
+  for (const item of state.contradictions) {
+    const card = document.createElement("article");
+    card.className = `conflict-card severity-${item.severity}`;
+    card.innerHTML = `
+      <div class="conflict-head">
+        <span class="severity-pill">${escapeHtml(item.severity)}</span>
+        <strong>${escapeHtml(item.topic)}</strong>
+      </div>
+      <p class="conflict-pages">${escapeHtml(item.title_a || item.slug_a)} ↔ ${escapeHtml(item.title_b || item.slug_b)}</p>
+      <div class="conflict-claims">
+        <p><span>A</span> ${escapeHtml(item.claim_a)}</p>
+        <p><span>B</span> ${escapeHtml(item.claim_b)}</p>
+      </div>
+      ${item.rationale ? `<p class="conflict-rationale">${escapeHtml(item.rationale)}</p>` : ""}
+      <div class="conflict-actions">
+        <button type="button" class="text-button conflict-open-a" data-slug="${escapeHtml(item.slug_a)}">Open A</button>
+        <button type="button" class="text-button conflict-open-b" data-slug="${escapeHtml(item.slug_b)}">Open B</button>
+        <button type="button" class="text-button conflict-dismiss" data-id="${escapeHtml(item.id)}">Dismiss</button>
+      </div>
+    `;
+    card.querySelector(".conflict-open-a")?.addEventListener("click", () => openWikiInsight(item.slug_a));
+    card.querySelector(".conflict-open-b")?.addEventListener("click", () => openWikiInsight(item.slug_b));
+    card.querySelector(".conflict-dismiss")?.addEventListener("click", () => dismissConflict(item.id));
+    els.conflictsList.appendChild(card);
+  }
+}
+
+async function scanConflicts() {
+  if (state.scanningConflicts) return;
+  state.scanningConflicts = true;
+  setButtonLoading(els.scanConflictsBtn, true, "…");
+  try {
+    const response = await apiFetch(`${API.contradictions}/scan`, {
+      method: "POST",
+      timeout: 300000,
+    });
+    state.contradictions = response.contradictions || [];
+    renderConflicts();
+    renderWikiPages();
+    toast(
+      `Scanned ${response.scanned_pairs} pair(s). ${response.new_conflicts} new, ${response.open_conflicts} open.`,
+    );
+  } catch (error) {
+    toast(error.message, "error");
+  } finally {
+    state.scanningConflicts = false;
+    setButtonLoading(els.scanConflictsBtn, false);
+  }
+}
+
+async function dismissConflict(id) {
+  try {
+    await apiFetch(`${API.contradictions}/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status: "dismissed" }),
+    });
+    state.contradictions = state.contradictions.filter((item) => item.id !== id);
+    renderConflicts();
+    renderWikiPages();
+    toast("Conflict dismissed.");
+  } catch (error) {
+    toast(error.message, "error");
+  }
 }
 
 function toggleWikiMenu(slug) {
@@ -1106,6 +1321,11 @@ function renderWikiPages() {
         <div class="wiki-item session-row wiki-card-row">
           <div class="session-details">
             <strong class="session-title">${escapeHtml(page.title)}</strong>
+            <div class="wiki-badges">
+              ${page.related_count ? `<span class="wiki-badge" title="Related pages">${page.related_count} linked</span>` : ""}
+              ${page.entity_count ? `<span class="wiki-badge muted" title="Entities">${page.entity_count} entities</span>` : ""}
+              ${page.open_conflict_count ? `<span class="wiki-badge warn" title="Open conflicts">${page.open_conflict_count} conflict${page.open_conflict_count === 1 ? "" : "s"}</span>` : ""}
+            </div>
             <span>${escapeHtml(page.summary || page.slug)}</span>
           </div>
           <div class="session-actions">
@@ -1113,6 +1333,7 @@ function renderWikiPages() {
           </div>
         </div>
         <div class="session-menu ${state.openWikiMenuSlug === page.slug ? "visible" : ""}">
+          <button type="button" class="session-action details">Details</button>
           <button type="button" class="session-action edit">Rename</button>
           <button type="button" class="session-action delete">Delete</button>
         </div>
@@ -1141,6 +1362,11 @@ function renderWikiPages() {
       item.querySelector(".wiki-menu-btn").addEventListener("click", (event) => {
         event.stopPropagation();
         toggleWikiMenu(page.slug);
+      });
+      item.querySelector(".session-action.details").addEventListener("click", (event) => {
+        event.stopPropagation();
+        state.openWikiMenuSlug = null;
+        openWikiInsight(page.slug);
       });
       item.querySelector(".session-action.edit").addEventListener("click", (event) => {
         event.stopPropagation();
@@ -1174,6 +1400,7 @@ async function uploadPdf(file) {
   try {
     const response = await apiFetch(API.upload, { method: "POST", body: form, timeout: 90000 });
     toast(`Uploaded ${response.filename}. Wiki page: ${response.wiki_page_slug || "not compiled"}`);
+    await loadConflicts();
     els.uploadState.textContent = "Ready";
     await loadWikiPages();
   } catch (error) {
@@ -1233,7 +1460,7 @@ function bindEvents() {
       saveAuth(response.access_token);
       state.user = response.user;
       showApp(true);
-      await Promise.all([loadWikiPages(), loadSessions()]);
+      await Promise.all([loadWikiPages(), loadSessions(), loadConflicts()]);
       renderChat();
     } catch (error) {
       showAuthError(error.message);
@@ -1323,10 +1550,19 @@ function bindEvents() {
   els.messageInput.addEventListener("input", resizeTextarea);
 
   els.cancelReplyBtn.addEventListener("click", clearReplyMode);
-  els.refreshWikiBtn.addEventListener("click", loadWikiPages);
+  els.refreshWikiBtn.addEventListener("click", async () => {
+    await loadWikiPages();
+    await loadConflicts();
+  });
+  els.scanConflictsBtn?.addEventListener("click", scanConflicts);
+  els.wikiInsightCloseBtn?.addEventListener("click", closeWikiInsight);
+  els.wikiInsightModal?.addEventListener("click", (event) => {
+    if (event.target === els.wikiInsightModal) closeWikiInsight();
+  });
   els.refreshSessionsBtn.addEventListener("click", loadSessions);
   els.newChatBtn.addEventListener("click", () => {
     state.currentSessionId = null;
+    state.pendingWikiContextSlug = null;
     localStorage.removeItem(ACTIVE_SESSION_KEY);
     state.messages = [];
     renderChat();
@@ -1349,7 +1585,9 @@ function bindEvents() {
     if (event.target === els.llmModal) closeLlmModal();
   });
   window.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && !els.llmModal.hidden) closeLlmModal();
+    if (event.key !== "Escape") return;
+    if (!els.wikiInsightModal.hidden) closeWikiInsight();
+    if (!els.llmModal.hidden) closeLlmModal();
   });
 
   els.llmProviderSelect.addEventListener("change", async () => {

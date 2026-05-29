@@ -75,6 +75,35 @@ class WikiPageListItem(BaseModel):
     freshness: str
     confidence: str
     source_ids: list[str]
+    entity_count: int = 0
+    related_count: int = 0
+    open_conflict_count: int = 0
+
+
+class WikiContradiction(BaseModel):
+    id: str
+    slug_a: str
+    slug_b: str
+    title_a: str = ""
+    title_b: str = ""
+    topic: str
+    claim_a: str
+    claim_b: str
+    severity: Literal["low", "medium", "high"] = "medium"
+    status: Literal["open", "dismissed", "resolved"] = "open"
+    rationale: str = ""
+    detected_at: str
+
+
+class ContradictionScanResponse(BaseModel):
+    scanned_pairs: int
+    new_conflicts: int
+    open_conflicts: int
+    contradictions: list[WikiContradiction] = Field(default_factory=list)
+
+
+class ContradictionStatusUpdate(BaseModel):
+    status: Literal["open", "dismissed", "resolved"]
 
 
 class ChatMessage(BaseModel):

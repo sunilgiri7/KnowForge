@@ -92,6 +92,18 @@
           <div id="emptyWiki" class="empty-mini">Upload a PDF or create a page to start.</div>
         </section>
 
+        <section class="panel conflicts-panel">
+          <div class="panel-heading">
+            <h2>Conflicts</h2>
+            <button id="scanConflictsBtn" class="icon-button" type="button" title="Scan wiki for contradictions">
+              <span>⚡</span>
+            </button>
+          </div>
+          <p class="panel-hint">Cross-page factual mismatches detected by KnowForge.</p>
+          <div id="conflictsList" class="conflicts-list"></div>
+          <div id="emptyConflicts" class="empty-mini">No open conflicts. Scan after uploading related documents.</div>
+        </section>
+
         <section class="panel session-panel">
           <div class="panel-heading">
             <h2>Chats</h2>
@@ -166,6 +178,16 @@
         </div>
       </article>
     </template>
+
+    <div id="wikiInsightModal" class="modal-overlay" hidden>
+      <div class="modal-card wiki-insight-card" role="dialog" aria-modal="true" aria-labelledby="wikiInsightTitle">
+        <div class="modal-header">
+          <strong id="wikiInsightTitle">Wiki page</strong>
+          <button id="wikiInsightCloseBtn" class="icon-button" type="button" title="Close">✕</button>
+        </div>
+        <div id="wikiInsightBody" class="wiki-insight-body"></div>
+      </div>
+    </div>
 
     <div id="llmModal" class="modal-overlay" hidden>
       <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="llmModalTitle">

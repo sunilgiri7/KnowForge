@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends
 from app.api.deps import get_current_user, wiki_store_for_user
 from app.db.models import User
 from app.llmwiki.compaction import WikiCompactor
+from app.llmwiki.contradictions import ContradictionStore
 from app.llmwiki.text import slugify
 from app.schemas.llmwiki import WikiPage, WikiPageListItem, WikiPageRename, WikiPageUpsert
 
@@ -19,7 +20,15 @@ async def read_index(user: Annotated[User, Depends(get_current_user)]) -> dict[s
 
 @router.get("/pages", response_model=list[WikiPageListItem])
 async def list_pages(user: Annotated[User, Depends(get_current_user)]) -> list[WikiPageListItem]:
-    return wiki_store_for_user(user).list_pages()
+    store = wiki_store_for_user(user)
+    pages = store.list_pages()
+    conflict_counts = ContradictionStore(store).open_count_by_slug()
+    return [
+        page.model_copy(
+            update={"open_conflict_count": conflict_counts.get(page.slug, 0)}
+        )
+        for page in pages
+    ]
 
 
 @router.get("/pages/{slug:path}", response_model=WikiPage)

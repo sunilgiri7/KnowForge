@@ -7,6 +7,7 @@ from typing import Any, TypedDict
 from app.core.config import settings
 from app.core.errors import KnowForgeError
 from app.llmwiki.compaction import WikiCompactor
+from app.llmwiki.contradictions import ContradictionScanner
 from app.llmwiki.groq import GroqClient
 from app.llmwiki.knowledge_graph import KnowledgeGraphBuilder, rebuild_all_relations
 from app.llmwiki.prompts import CHUNK_NOTES_PROMPT, COMPILE_PROMPT, SYNTHESIZE_WIKI_PROMPT
@@ -149,6 +150,12 @@ class SourceIngestor:
         saved = self.store.upsert_page(page, skip_relink=True)
         rebuild_all_relations(self.store)
         await self.compactor.compact_if_needed(saved)
+        if settings.contradiction_scan_after_ingest and self.compile_llm.available:
+            scanner = ContradictionScanner(self.store, self.compile_llm)
+            await scanner.scan(
+                focus_slugs={saved.meta.slug},
+                max_pairs=settings.contradiction_ingest_max_pairs,
+            )
         return saved
 
     async def _run_compile_graph(self, *, source_id: str, filename: str, text: str) -> CompileState:

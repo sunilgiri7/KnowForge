@@ -18,6 +18,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from app.core.config import settings
+from app.llmwiki.contradictions import ContradictionScanner
 from app.llmwiki.groq import GroqClient
 from app.llmwiki.indexer import PageCandidate, WikiIndexer
 from app.llmwiki.prompts import (
@@ -90,13 +91,21 @@ class AIHarness:
                 notes="Anchored reply to selected parent message thread.",
             ))
 
-        # ── Fast path: explicit wiki page selection ──────────────────────────
-        if request.context_page_slugs:
+        # ── Fast path: explicit wiki page selection or slug named in question ─
+        selected_slugs = list(request.context_page_slugs)
+        if not selected_slugs:
+            selected_slugs = self.indexer.resolve_slug_mentions(request.question)
+        if selected_slugs:
+            reason = (
+                "Explicit wiki page context selected by user."
+                if request.context_page_slugs
+                else f"Question names wiki page(s): {', '.join(selected_slugs)}."
+            )
             decision = RouteDecision(
                 route="wiki",
-                page_slugs=request.context_page_slugs,
+                page_slugs=selected_slugs[: settings.kg_max_pages_in_context],
                 confidence=1.0,
-                reason="Explicit wiki page context selected by user.",
+                reason=reason,
                 difficulty=self.indexer.classify_difficulty(request.question, []),
             )
             context, used_pages = self.indexer.build_exact_page_context(
@@ -104,6 +113,15 @@ class AIHarness:
                 char_budget=settings.wiki_context_char_budget,
             )
             traces.append(self._trace_decision(decision))
+            if not request.context_page_slugs and selected_slugs:
+                traces.append(
+                    AgentTrace(
+                        agent="wiki_selector",
+                        action="resolved_slug_in_question",
+                        confidence=1.0,
+                        notes=", ".join(selected_slugs),
+                    )
+                )
             return HarnessPlan(
                 question=request.question,
                 retrieval_question=request.question,
@@ -250,6 +268,19 @@ class AIHarness:
             else:
                 context, used_pages = self.indexer.build_context(
                     decision.page_slugs, retrieval_question, char_budget=context_budget,
+                )
+            conflict_note = ContradictionScanner(self.store).context_warnings_for_slugs(
+                used_pages or decision.page_slugs
+            )
+            if conflict_note:
+                context = f"{conflict_note}\n\n{context}"
+                traces.append(
+                    AgentTrace(
+                        agent="contradiction_guard",
+                        action="injected_open_conflicts",
+                        confidence=0.82,
+                        notes="Open cross-page conflicts prepended to wiki context.",
+                    )
                 )
         else:
             context, used_pages = "", []

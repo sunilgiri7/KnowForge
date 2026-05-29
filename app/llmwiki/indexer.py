@@ -13,6 +13,7 @@ Key improvements over v1:
 """
 from __future__ import annotations
 
+import re
 import threading
 import time
 from collections import Counter
@@ -30,6 +31,8 @@ from app.llmwiki.text import (
 from app.schemas.llmwiki import RouteDecision, WikiPage
 
 # ── Routing intent term sets ──────────────────────────────────────────────────
+
+_SLUG_TOKEN_RE = re.compile(r"\b[a-z0-9]+(?:-[a-z0-9]+)+\b", re.IGNORECASE)
 
 EXACT_EVIDENCE_TERMS = {
     "evidence",
@@ -127,12 +130,14 @@ class BM25PageIndex:
 
     FIELD_WEIGHTS: dict[str, float] = {
         "title":    5.0,
+        "slug":     4.5,
         "aliases":  3.5,
         "tags":     3.0,
         "entities": 1.2,
         "summary":  2.0,
         "content":  1.0,
     }
+
     # How many content chars to index — balances coverage vs. index build time
     CONTENT_INDEX_CHARS = 8_000
 
@@ -273,8 +278,10 @@ class BM25PageIndex:
 
     @staticmethod
     def _extract_fields(page: WikiPage) -> dict[str, str]:
+        slug_text = page.meta.slug.replace("-", " ")
         return {
             "title":    page.meta.title,
+            "slug":     f"{page.meta.slug} {slug_text}",
             "aliases":  " ".join(page.meta.aliases),
             "tags":     " ".join(page.meta.tags),
             "entities": " ".join(page.meta.entities),
@@ -342,6 +349,30 @@ class WikiIndexer:
         self._indexed_page_count = -1
         self._indexed_mutation_revision = -1
         self._graph.invalidate()
+
+    def resolve_slug_mentions(self, question: str) -> list[str]:
+        """Match explicit wiki slugs mentioned in the user's question."""
+        self._ensure_fresh()
+        known = {item.slug for item in self.store.list_pages()}
+        if not known:
+            return []
+
+        found: list[str] = []
+        seen: set[str] = set()
+        lowered = question.lower()
+
+        for slug in sorted(known, key=len, reverse=True):
+            if slug in lowered and slug not in seen:
+                seen.add(slug)
+                found.append(slug)
+
+        for match in _SLUG_TOKEN_RE.findall(question):
+            candidate = match.lower()
+            if candidate in known and candidate not in seen:
+                seen.add(candidate)
+                found.append(candidate)
+
+        return found
 
     def expand_with_graph(
         self,

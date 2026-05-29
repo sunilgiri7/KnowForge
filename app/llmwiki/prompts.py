@@ -343,8 +343,10 @@ requests directly from your own knowledge.
 
 Rules:
 - If the user asks for private organisation facts (salary, clauses, specific
-  names from a document), say the wiki has no supporting page yet and tell
-  them which document to upload to get a precise answer.
+  names from a document) and the wiki truly has no matching page, say the wiki
+  has no supporting page yet and tell them which document to upload.
+- If the user names a specific wiki page slug or title in quotes, do NOT claim
+  the page is missing — the router already decided wiki context was unavailable.
 - Do not pretend to know internal facts that were not provided.
 - Keep the answer concise unless the user asks for depth.
 - If history includes a selected thread, answer as a focused reply to that message.
@@ -411,6 +413,42 @@ CONTEXT:
 
 DRAFT_ANSWER:
 {answer}
+"""
+
+CONTRADICTION_PROMPT = """You are KnowForge's contradiction analyst.
+
+Two wiki pages below are linked in the user's knowledge graph (shared entities or
+explicit relations). Compare overlapping factual claims only.
+
+Rules:
+- Report a contradiction only when both pages make incompatible factual assertions
+  about the same subject (dates, amounts, roles, policies, obligations, metrics).
+- Ignore differences in scope, summarization level, or one page being more detailed.
+- Ignore "not mentioned" vs "mentioned" unless one page explicitly negates the other.
+- Prefer verbatim or tight paraphrases for claim_a and claim_b.
+- severity high: direct numeric/date/policy conflict; medium: clear factual mismatch;
+  low: ambiguous wording that may confuse readers.
+
+Return JSON only:
+{
+  "contradictions": [
+    {
+      "topic": "short label",
+      "claim_a": "from page A",
+      "claim_b": "conflicting claim from page B",
+      "severity": "low|medium|high",
+      "rationale": "one sentence"
+    }
+  ]
+}
+
+If no contradictions: {"contradictions": []}
+
+PAGE_A (title={title_a}, slug={slug_a}):
+{excerpt_a}
+
+PAGE_B (title={title_b}, slug={slug_b}):
+{excerpt_b}
 """
 
 COMPACT_PROMPT = """You are KnowForge's wiki compactor.
