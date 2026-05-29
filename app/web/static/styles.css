@@ -2418,7 +2418,9 @@ body.resizing-sidebar {
   color: var(--ink);
 }
 
-.report-template-form input[type="text"] {
+.report-template-form input[type="text"],
+.report-template-form select,
+.report-template-form textarea {
   min-height: 38px;
   padding: 8px 12px;
   border: 1px solid var(--line);
@@ -2428,10 +2430,14 @@ body.resizing-sidebar {
   outline: none;
   font-size: 13px;
   width: 100%;
+  box-sizing: border-box;
+  font-family: inherit;
   transition: all 0.2s ease;
 }
 
-.report-template-form input[type="text"]:focus {
+.report-template-form input[type="text"]:focus,
+.report-template-form select:focus,
+.report-template-form textarea:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px rgba(204, 90, 55, 0.1);
 }
@@ -2448,8 +2454,9 @@ body.resizing-sidebar {
   margin-bottom: 8px;
 }
 
-.rt-page-scope-item {
+.report-template-form .rt-page-scope-item {
   display: flex;
+  flex-direction: row;
   align-items: center;
   gap: 8px;
   font-size: 13px;
@@ -2457,7 +2464,7 @@ body.resizing-sidebar {
   color: var(--ink);
 }
 
-.rt-page-scope-item input[type="checkbox"] {
+.report-template-form .rt-page-scope-item input[type="checkbox"] {
   accent-color: var(--accent);
   width: 15px;
   height: 15px;

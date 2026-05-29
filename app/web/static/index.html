@@ -371,20 +371,36 @@
               <div class="report-template-form">
                 <label class="llm-label">Name<input id="rtName" type="text" placeholder="e.g. Vendor Scorecard" /></label>
                 <label class="llm-label">Description<input id="rtDesc" type="text" placeholder="Optional" /></label>
-                <label class="llm-label" style="margin-top: 8px;">Target Wiki Pages (Scope) <span class="muted" style="font-size: 0.85em; font-weight: normal; margin-left: 4px;">(The LLM can only see the wiki pages selected here to build the file with the requested template. If none are selected, the LLM will answer using its own general knowledge without any wiki context.)</span></label>
+                <label class="llm-label">Template Type / Format
+                  <select id="rtFormat" style="margin-top: 4px; width: 100%;">
+                    <option value="xlsx">Excel (XLSX) - Tabular</option>
+                    <option value="pdf">PDF - Document</option>
+                    <option value="docx">Word (DOCX) - Document</option>
+                  </select>
+                </label>
+                <label class="llm-label" style="margin-top: 8px;">Target Wiki Pages (Scope) <span class="muted" style="font-size: 0.85em; font-weight: normal; margin-left: 4px;">(The LLM can only see the wiki pages selected here to build the file with the requested template.)</span></label>
                 <div id="rtPageScopeList" class="rt-page-scope-list">
                   <!-- Checkboxes populated dynamically from state.wikiPages -->
                 </div>
-                <div id="rtColumns" class="rt-columns">
-                  <div class="rt-col-row">
-                    <input class="rt-col-key" type="text" placeholder="key" />
-                    <input class="rt-col-label" type="text" placeholder="Column label" />
-                    <input class="rt-col-instr" type="text" placeholder="Extraction instruction" />
-                    <button class="rt-remove-col text-button" type="button">✕</button>
+                
+                <div id="rtColumnsGroup">
+                  <div id="rtColumns" class="rt-columns">
+                    <div class="rt-col-row">
+                      <input class="rt-col-key" type="text" placeholder="key" />
+                      <input class="rt-col-label" type="text" placeholder="Column label" />
+                      <input class="rt-col-instr" type="text" placeholder="Extraction instruction" />
+                      <button class="rt-remove-col text-button" type="button">✕</button>
+                    </div>
                   </div>
+                  <button id="rtAddCol" class="text-button" type="button">+ Add Column</button>
                 </div>
-                <button id="rtAddCol" class="text-button" type="button">+ Add Column</button>
-                <div style="display: flex; align-items: center; gap: 8px; margin-top: 8px;">
+
+                <div id="rtTargetInstructionGroup" class="llm-label" style="display: none; flex-direction: column; margin-top: 8px;">
+                  Target Extraction Instruction
+                  <textarea id="rtTargetInstruction" placeholder="e.g. Extract and compile a detailed summary of all procurement findings across the selected documents..." style="margin-top: 4px; min-height: 80px; resize: vertical; width: 100%; box-sizing: border-box; font-family: inherit; font-size: inherit;" class="composer-textarea"></textarea>
+                </div>
+
+                <div style="display: flex; align-items: center; gap: 8px; margin-top: 12px;">
                   <button id="rtSave" class="primary-button" type="button">Save Template</button>
                   <button id="rtCancelEdit" class="secondary-button" type="button" hidden>Cancel Edit</button>
                 </div>

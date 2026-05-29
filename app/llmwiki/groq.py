@@ -53,6 +53,7 @@ class GroqClient:
         from groq import Groq
 
         client = Groq(api_key=self.api_key)
+        print(f"Sending prompt to GROQ: {prompt}")
         completion = client.chat.completions.create(
             model=self.model,
             messages=[{"role": "user", "content": prompt}],

@@ -1913,6 +1913,28 @@ function bindTier2Events() {
   document.getElementById("rtAddCol")?.addEventListener("click", addColumnRow);
   document.getElementById("rtSave")?.addEventListener("click", saveReportTemplate);
   document.getElementById("rtCancelEdit")?.addEventListener("click", cancelEditTemplate);
+  document.getElementById("rtFormat")?.addEventListener("change", (e) => {
+    const isDoc = e.target.value !== "xlsx";
+    document.getElementById("rtColumnsGroup").style.display = isDoc ? "none" : "block";
+    document.getElementById("rtTargetInstructionGroup").style.display = isDoc ? "flex" : "none";
+  });
+  document.getElementById("genTemplateSelect")?.addEventListener("change", (e) => {
+    const templateId = e.target.value;
+    if (!templateId) return;
+    const t = tier2State.reportTemplates.find(x => x.id === templateId);
+    if (!t) return;
+    const isDoc = t.columns && t.columns.length === 1 && t.columns[0].key === "content";
+    const formatSelect = document.getElementById("genFormatSelect");
+    if (formatSelect) {
+      if (isDoc) {
+        if (formatSelect.value === "xlsx") {
+          formatSelect.value = "pdf";
+        }
+      } else {
+        formatSelect.value = "xlsx";
+      }
+    }
+  });
   document.getElementById("genRunBtn")?.addEventListener("click", runReportGeneration);
   document.getElementById("refreshJobsBtn")?.addEventListener("click", () => loadReportJobs());
 
@@ -2346,6 +2368,7 @@ function addColumnRow() {
 async function saveReportTemplate() {
   const name = document.getElementById("rtName").value.trim();
   const desc = document.getElementById("rtDesc").value.trim();
+  const format = document.getElementById("rtFormat").value;
   const errEl = document.getElementById("rtError");
   const btn = document.getElementById("rtSave");
   errEl.hidden = true;
@@ -2356,24 +2379,36 @@ async function saveReportTemplate() {
   const selectedCheckboxes = document.querySelectorAll('input[name="rtScopeSlug"]:checked');
   const scope_slugs = Array.from(selectedCheckboxes).map(cb => cb.value);
 
-  const colRows = document.querySelectorAll("#rtColumns .rt-col-row");
   const columns = [];
-  let hasError = false;
-  for (const row of colRows) {
-    const key = row.querySelector(".rt-col-key").value.trim().replace(/\s+/g, "_").toLowerCase();
-    const label = row.querySelector(".rt-col-label").value.trim();
-    const instr = row.querySelector(".rt-col-instr").value.trim();
-    if (!key || !label || !instr) {
-      errEl.textContent = "All column fields (key, label, instruction) must be filled in.";
+  if (format !== "xlsx") {
+    const instr = document.getElementById("rtTargetInstruction").value.trim();
+    if (!instr) {
+      errEl.textContent = "Target extraction instruction is required.";
       errEl.hidden = false;
-      hasError = true;
-      break;
+      return;
     }
-    columns.push({ key, label, instruction: instr });
-  }
-  if (hasError || !columns.length) {
-    if (!hasError) { errEl.textContent = "At least one column is required."; errEl.hidden = false; }
-    return;
+    columns.push({ key: "content", label: "Content", instruction: instr });
+  } else {
+    const colRows = document.querySelectorAll("#rtColumns .rt-col-row");
+    let hasError = false;
+    for (const row of colRows) {
+      const key = row.querySelector(".rt-col-key").value.trim().replace(/\s+/g, "_").toLowerCase();
+      const label = row.querySelector(".rt-col-label").value.trim();
+      const instr = row.querySelector(".rt-col-instr").value.trim();
+      if (!key || !label || !instr) {
+        errEl.textContent = "All column fields (key, label, instruction) must be filled in.";
+        errEl.hidden = false;
+        hasError = true;
+        break;
+      }
+      columns.push({ key, label, instruction: instr });
+    }
+    if (hasError) return;
+    if (!columns.length) {
+      errEl.textContent = "At least one column is required.";
+      errEl.hidden = false;
+      return;
+    }
   }
 
   const isEditing = !!tier2State.editingTemplateId;
@@ -2458,29 +2493,46 @@ function startEditTemplate(t) {
     cb.checked = scopes.includes(cb.value);
   });
   
-  // Populate columns
-  const container = document.getElementById("rtColumns");
-  if (container) {
-    container.innerHTML = "";
-    const columns = t.columns || [];
-    if (columns.length === 0) {
-      resetColRows();
-    } else {
-      for (const col of columns) {
-        const row = document.createElement("div");
-        row.className = "rt-col-row";
-        row.innerHTML = `
-          <input class="rt-col-key" type="text" placeholder="key (e.g. salary)" title="Unique identifier, no spaces" value="${escapeHtml(col.key)}" />
-          <input class="rt-col-label" type="text" placeholder="Column label (e.g. Salary)" value="${escapeHtml(col.label)}" />
-          <input class="rt-col-instr" type="text" placeholder="Instruction (e.g. Find the annual salary)" value="${escapeHtml(col.instruction)}" />
-          <button class="rt-remove-col icon-button" type="button" title="Remove column">✕</button>
-        `;
-        row.querySelector(".rt-remove-col").addEventListener("click", () => {
-          const allRows = container.querySelectorAll(".rt-col-row");
-          if (allRows.length <= 1) { toast("At least one column is required.", "error"); return; }
-          row.remove();
-        });
-        container.appendChild(row);
+  const isDoc = t.columns && t.columns.length === 1 && t.columns[0].key === "content";
+  const formatSelect = document.getElementById("rtFormat");
+  const colsGroup = document.getElementById("rtColumnsGroup");
+  const instrGroup = document.getElementById("rtTargetInstructionGroup");
+
+  if (isDoc) {
+    formatSelect.value = "pdf";
+    document.getElementById("rtTargetInstruction").value = t.columns[0].instruction || "";
+    colsGroup.style.display = "none";
+    instrGroup.style.display = "flex";
+  } else {
+    formatSelect.value = "xlsx";
+    document.getElementById("rtTargetInstruction").value = "";
+    colsGroup.style.display = "block";
+    instrGroup.style.display = "none";
+
+    // Populate columns
+    const container = document.getElementById("rtColumns");
+    if (container) {
+      container.innerHTML = "";
+      const columns = t.columns || [];
+      if (columns.length === 0) {
+        resetColRows();
+      } else {
+        for (const col of columns) {
+          const row = document.createElement("div");
+          row.className = "rt-col-row";
+          row.innerHTML = `
+            <input class="rt-col-key" type="text" placeholder="key (e.g. salary)" title="Unique identifier, no spaces" value="${escapeHtml(col.key)}" />
+            <input class="rt-col-label" type="text" placeholder="Column label (e.g. Salary)" value="${escapeHtml(col.label)}" />
+            <input class="rt-col-instr" type="text" placeholder="Instruction (e.g. Find the annual salary)" value="${escapeHtml(col.instruction)}" />
+            <button class="rt-remove-col icon-button" type="button" title="Remove column">✕</button>
+          `;
+          row.querySelector(".rt-remove-col").addEventListener("click", () => {
+            const allRows = container.querySelectorAll(".rt-col-row");
+            if (allRows.length <= 1) { toast("At least one column is required.", "error"); return; }
+            row.remove();
+          });
+          container.appendChild(row);
+        }
       }
     }
   }
@@ -2501,6 +2553,11 @@ function cancelEditTemplate() {
   // Reset fields
   document.getElementById("rtName").value = "";
   document.getElementById("rtDesc").value = "";
+  document.getElementById("rtFormat").value = "xlsx";
+  document.getElementById("rtTargetInstruction").value = "";
+  document.getElementById("rtColumnsGroup").style.display = "block";
+  document.getElementById("rtTargetInstructionGroup").style.display = "none";
+  
   document.querySelectorAll('input[name="rtScopeSlug"]').forEach(cb => cb.checked = false);
   resetColRows();
   
@@ -2523,7 +2580,8 @@ function loadReportTemplatesIntoSelect() {
   for (const t of tier2State.reportTemplates) {
     const opt = document.createElement("option");
     opt.value = t.id;
-    opt.textContent = `${t.name} (${t.columns?.length || 0} cols)`;
+    const isDoc = t.columns && t.columns.length === 1 && t.columns[0].key === "content";
+    opt.textContent = `${t.name} ${isDoc ? "[Document]" : "[Tabular]"}`;
     sel.appendChild(opt);
   }
   if (prev) sel.value = prev;
