@@ -2,8 +2,8 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends
 
-from app.api.deps import get_current_user, wiki_store_for_user
-from app.db.models import User
+from app.api.deps import get_current_user, wiki_store_for_workspace, get_active_workspace_dep
+from app.db.models import User, Workspace
 from app.llmwiki.compaction import WikiCompactor
 from app.llmwiki.contradictions import ContradictionStore
 from app.llmwiki.text import slugify
@@ -13,14 +13,20 @@ router = APIRouter(prefix="/wiki", tags=["wiki"])
 
 
 @router.get("/index", response_model=dict[str, str])
-async def read_index(user: Annotated[User, Depends(get_current_user)]) -> dict[str, str]:
-    store = wiki_store_for_user(user)
+async def read_index(
+    workspace: Annotated[Workspace, Depends(get_active_workspace_dep)],
+    user: Annotated[User, Depends(get_current_user)],
+) -> dict[str, str]:
+    store = wiki_store_for_workspace(workspace)
     return {"index": store.read_index()}
 
 
 @router.get("/pages", response_model=list[WikiPageListItem])
-async def list_pages(user: Annotated[User, Depends(get_current_user)]) -> list[WikiPageListItem]:
-    store = wiki_store_for_user(user)
+async def list_pages(
+    workspace: Annotated[Workspace, Depends(get_active_workspace_dep)],
+    user: Annotated[User, Depends(get_current_user)],
+) -> list[WikiPageListItem]:
+    store = wiki_store_for_workspace(workspace)
     pages = store.list_pages()
     conflict_counts = ContradictionStore(store).open_count_by_slug()
     return [
@@ -32,17 +38,22 @@ async def list_pages(user: Annotated[User, Depends(get_current_user)]) -> list[W
 
 
 @router.get("/pages/{slug:path}", response_model=WikiPage)
-async def read_page(slug: str, user: Annotated[User, Depends(get_current_user)]) -> WikiPage:
-    return wiki_store_for_user(user).read_page(slug)
+async def read_page(
+    slug: str,
+    workspace: Annotated[Workspace, Depends(get_active_workspace_dep)],
+    user: Annotated[User, Depends(get_current_user)],
+) -> WikiPage:
+    return wiki_store_for_workspace(workspace).read_page(slug)
 
 
 @router.put("/pages/{slug:path}", response_model=WikiPage)
 async def upsert_page(
     slug: str,
     payload: WikiPageUpsert,
+    workspace: Annotated[Workspace, Depends(get_active_workspace_dep)],
     user: Annotated[User, Depends(get_current_user)],
 ) -> WikiPage:
-    store = wiki_store_for_user(user)
+    store = wiki_store_for_workspace(workspace)
     page = store.make_page(
         title=payload.title,
         slug=payload.slug or slugify(slug),
@@ -61,20 +72,28 @@ async def upsert_page(
 async def rename_page(
     slug: str,
     payload: WikiPageRename,
+    workspace: Annotated[Workspace, Depends(get_active_workspace_dep)],
     user: Annotated[User, Depends(get_current_user)],
 ) -> WikiPage:
-    return wiki_store_for_user(user).rename_page(slug, payload.title)
+    return wiki_store_for_workspace(workspace).rename_page(slug, payload.title)
 
 
 @router.delete("/pages/{slug:path}", response_model=dict[str, bool])
-async def delete_page(slug: str, user: Annotated[User, Depends(get_current_user)]) -> dict[str, bool]:
-    wiki_store_for_user(user).delete_page(slug)
+async def delete_page(
+    slug: str,
+    workspace: Annotated[Workspace, Depends(get_active_workspace_dep)],
+    user: Annotated[User, Depends(get_current_user)],
+) -> dict[str, bool]:
+    wiki_store_for_workspace(workspace).delete_page(slug)
     return {"deleted": True}
 
 
 @router.post("/compact", response_model=dict[str, int])
-async def compact_pages(user: Annotated[User, Depends(get_current_user)]) -> dict[str, int]:
-    store = wiki_store_for_user(user)
+async def compact_pages(
+    workspace: Annotated[Workspace, Depends(get_active_workspace_dep)],
+    user: Annotated[User, Depends(get_current_user)],
+) -> dict[str, int]:
+    store = wiki_store_for_workspace(workspace)
     compactor = WikiCompactor(store)
     count = 0
     for item in store.list_pages():

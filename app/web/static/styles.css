@@ -1654,7 +1654,36 @@ body.resizing-sidebar {
   cursor: pointer;
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 8px;
+}
+.ws-item-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.ws-item-left span {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ws-delete-btn {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+}
+.ws-delete-btn:hover {
+  background: rgba(180, 35, 24, 0.1);
+  color: var(--danger);
 }
 .ws-item:hover { background: var(--accent-soft); }
 .ws-item.active { color: var(--accent-strong); font-weight: 700; }
@@ -1838,4 +1867,30 @@ body.resizing-sidebar {
 .llm-label select:focus, .llm-label input:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px rgba(11,122,117,0.12);
+}
+
+.rt-page-scope-list {
+  max-height: 140px;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 8px 12px;
+  background: var(--surface);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.rt-page-scope-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--ink);
+  cursor: pointer;
+}
+.rt-page-scope-item input[type="checkbox"] {
+  width: auto;
+  min-height: auto;
+  cursor: pointer;
 }

@@ -13,6 +13,7 @@ def get_or_create_session(
     user: User,
     session_id: str | None,
     question: str,
+    workspace_id: str | None = None,
 ) -> ChatSession:
     if session_id:
         session = db.scalar(
@@ -24,9 +25,15 @@ def get_or_create_session(
                 status_code=404,
                 code="session_not_found",
             )
+        # Update workspace if not set
+        if workspace_id and not session.workspace_id:
+            session.workspace_id = workspace_id
+            db.commit()
         return session
     title = question.strip().splitlines()[0][:80] or "New chat"
-    session = ChatSession(user_id=user.id, title=title)
+    # Use provided workspace_id or user's active workspace
+    wid = workspace_id or user.active_workspace_id
+    session = ChatSession(user_id=user.id, title=title, workspace_id=wid)
     db.add(session)
     db.flush()
     return session
@@ -76,12 +83,27 @@ def history_for_session(db: Session, session: ChatSession, *, limit: int = 80) -
     ]
 
 
-def list_user_sessions(db: Session, user: User) -> list[ChatSessionItem]:
-    sessions = db.scalars(
-        select(ChatSession)
-        .where(ChatSession.user_id == user.id)
-        .order_by(ChatSession.updated_at.desc())
-    ).all()
+def list_user_sessions(db: Session, user: User, workspace_id: str | None = None) -> list[ChatSessionItem]:
+    wid = workspace_id or user.active_workspace_id
+    
+    # Retrieve the user's personal workspace ID to group legacy/null workspace sessions there
+    personal_ws_id = None
+    for membership in user.workspace_memberships:
+        if membership.workspace and membership.workspace.is_personal:
+            personal_ws_id = membership.workspace.id
+            break
+
+    stmt = select(ChatSession).where(ChatSession.user_id == user.id)
+    if wid:
+        if wid == personal_ws_id:
+            # Personal workspace shows both personal sessions and legacy sessions with null workspace_id
+            stmt = stmt.where((ChatSession.workspace_id == wid) | (ChatSession.workspace_id.is_(None)))
+        else:
+            stmt = stmt.where(ChatSession.workspace_id == wid)
+    else:
+        stmt = stmt.where(ChatSession.workspace_id.is_(None))
+        
+    sessions = db.scalars(stmt.order_by(ChatSession.updated_at.desc())).all()
     return [session_item(session) for session in sessions]
 
 

@@ -3,8 +3,8 @@ from typing import Annotated
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_user, wiki_store_for_user
-from app.db.models import User
+from app.api.deps import get_current_user, wiki_store_for_workspace, get_active_workspace_dep
+from app.db.models import User, Workspace
 from app.db.session import get_db
 from app.llmwiki.chat import ChatService
 from app.schemas.llmwiki import (
@@ -38,9 +38,10 @@ router = APIRouter(prefix="/chat", tags=["chat"])
 async def chat(
     request: ChatRequest,
     user: Annotated[User, Depends(get_current_user)],
+    workspace: Annotated[Workspace, Depends(get_active_workspace_dep)],
     db: Annotated[Session, Depends(get_db)],
 ) -> ChatResponse:
-    session = get_or_create_session(db, user, request.session_id, request.question)
+    session = get_or_create_session(db, user, request.session_id, request.question, workspace.id)
     request.session_id = session.id
     if request.parent_id and request.interaction == "message":
         request.interaction = "reply"
@@ -71,7 +72,7 @@ async def chat(
                 user_llm = AnthropicLlm(api_key=key, model=(record.model or "claude-3-5-sonnet-latest"))
             elif provider == "gemini":
                 user_llm = GeminiLlm(api_key=key, model=(record.model or "gemini-2.0-flash"))
-    response = await ChatService(wiki_store_for_user(user), llm=user_llm).answer(request)
+    response = await ChatService(wiki_store_for_workspace(workspace), llm=user_llm).answer(request)
     add_message(
         db,
         user=user,
@@ -91,9 +92,10 @@ async def chat(
 @router.get("/sessions", response_model=list[ChatSessionItem])
 async def sessions(
     user: Annotated[User, Depends(get_current_user)],
+    workspace: Annotated[Workspace, Depends(get_active_workspace_dep)],
     db: Annotated[Session, Depends(get_db)],
 ) -> list[ChatSessionItem]:
-    return list_user_sessions(db, user)
+    return list_user_sessions(db, user, workspace.id)
 
 
 @router.get("/sessions/{session_id}", response_model=ChatSessionMessages)

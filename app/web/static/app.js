@@ -1288,11 +1288,32 @@ async function loadWikiPages() {
       state.openWikiMenuSlug = null;
     }
     renderWikiPages();
+    renderWikiPageSelectionForTemplate();
   } catch (error) {
     state.wikiPages = [];
     renderWikiPages();
+    renderWikiPageSelectionForTemplate();
     els.emptyWiki.hidden = false;
     els.emptyWiki.textContent = error.message;
+  }
+}
+
+function renderWikiPageSelectionForTemplate() {
+  const container = document.getElementById("rtPageScopeList");
+  if (!container) return;
+  container.innerHTML = "";
+  if (!state.wikiPages || !state.wikiPages.length) {
+    container.innerHTML = `<span class="muted" style="font-size:12px; font-style:italic;">No wiki pages available in this workspace.</span>`;
+    return;
+  }
+  for (const page of state.wikiPages) {
+    const item = document.createElement("label");
+    item.className = "rt-page-scope-item";
+    item.innerHTML = `
+      <input type="checkbox" name="rtScopeSlug" value="${escapeHtml(page.slug)}" />
+      <span>${escapeHtml(page.title || page.slug)}</span>
+    `;
+    container.appendChild(item);
   }
 }
 
@@ -1743,6 +1764,7 @@ let tier2State = {
   reportTemplates: [],
   reportJobs: [],
   activeReportTab: "templates",
+  editingTemplateId: null,
 };
 
 function bindTier2Events() {
@@ -1761,13 +1783,33 @@ function bindTier2Events() {
     const name = prompt("New workspace name:");
     if (!name?.trim()) return;
     try {
-      await apiFetch(API_WORKSPACES, {
+      const newWs = await apiFetch(API_WORKSPACES, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: name.trim() }),
       });
       await loadWorkspaces();
       toast("Workspace created.");
+      
+      // Auto-switch to the new workspace
+      if (newWs && newWs.id) {
+        await apiFetch(`${API_WORKSPACES}/switch`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ workspace_id: newWs.id }),
+        });
+        tier2State.activeWorkspaceId = newWs.id;
+        renderWorkspaceSwitcher();
+        
+        // Clear active session
+        state.currentSessionId = null;
+        state.messages = [];
+        localStorage.removeItem(ACTIVE_SESSION_KEY);
+        renderChat();
+        
+        await Promise.all([loadWikiPages(), loadConflicts(), loadSessions()]);
+        toast(`Switched to "${newWs.name}".`);
+      }
     } catch (err) { toast(err.message, "error"); }
   });
 
@@ -1808,6 +1850,7 @@ function bindTier2Events() {
   document.getElementById("reportTabJobs")?.addEventListener("click", () => switchReportTab("jobs"));
   document.getElementById("rtAddCol")?.addEventListener("click", addColumnRow);
   document.getElementById("rtSave")?.addEventListener("click", saveReportTemplate);
+  document.getElementById("rtCancelEdit")?.addEventListener("click", cancelEditTemplate);
   document.getElementById("genRunBtn")?.addEventListener("click", runReportGeneration);
   document.getElementById("refreshJobsBtn")?.addEventListener("click", () => loadReportJobs());
 
@@ -1823,8 +1866,25 @@ function bindTier2Events() {
     if (e.key !== "Escape") return;
     document.getElementById("versionsModal").hidden = true;
     document.getElementById("saveWikiModal").hidden = true;
+    document.getElementById("deleteWsModal").hidden = true;
     closeReportsModal();
   });
+
+  // Delete Workspace modal
+  document.getElementById("deleteWsCloseBtn")?.addEventListener("click", closeDeleteWsModal);
+  document.getElementById("deleteWsCancelBtn")?.addEventListener("click", closeDeleteWsModal);
+  document.getElementById("deleteWsModal")?.addEventListener("click", (e) => {
+    if (e.target === document.getElementById("deleteWsModal")) closeDeleteWsModal();
+  });
+  
+  const deleteInput = document.getElementById("deleteWsInput");
+  const deleteConfirmBtn = document.getElementById("deleteWsConfirmBtn");
+  deleteInput?.addEventListener("input", () => {
+    if (deleteConfirmBtn) {
+      deleteConfirmBtn.disabled = deleteInput.value.trim().toLowerCase() !== "delete";
+    }
+  });
+  deleteConfirmBtn?.addEventListener("click", confirmDeleteWorkspace);
 }
 
 async function loadWorkspaces() {
@@ -1846,8 +1906,23 @@ function renderWorkspaceSwitcher() {
   for (const ws of tier2State.workspaces) {
     const item = document.createElement("div");
     item.className = `ws-item ${ws.id === tier2State.activeWorkspaceId ? "active" : ""}`;
-    item.innerHTML = `<span>⬡</span><span>${escapeHtml(ws.name)}</span>${ws.your_role ? `<small style="color:var(--muted)">${escapeHtml(ws.your_role)}</small>` : ""}`;
+    item.innerHTML = `
+      <div class="ws-item-left">
+        <span>⬡</span>
+        <span>${escapeHtml(ws.name)}</span>
+        ${ws.your_role ? `<small style="color:var(--muted)">${escapeHtml(ws.your_role)}</small>` : ""}
+      </div>
+      ${(tier2State.workspaces.length > 1 && (ws.your_role === 'owner' || ws.your_role === 'admin')) ? `
+        <button class="ws-delete-btn" type="button" title="Delete workspace">🗑</button>
+      ` : ''}
+    `;
+
     item.addEventListener("click", async (e) => {
+      if (e.target.classList.contains("ws-delete-btn")) {
+        e.stopPropagation();
+        openDeleteWsModal(ws);
+        return;
+      }
       e.stopPropagation();
       if (ws.id === tier2State.activeWorkspaceId) { document.getElementById("workspaceDropdown").hidden = true; return; }
       try {
@@ -1860,11 +1935,79 @@ function renderWorkspaceSwitcher() {
         document.getElementById("workspaceDropdown").hidden = true;
         tier2State.wsDropdownOpen = false;
         renderWorkspaceSwitcher();
-        await Promise.all([loadWikiPages(), loadConflicts()]);
+        
+        // Clear active session
+        state.currentSessionId = null;
+        state.messages = [];
+        localStorage.removeItem(ACTIVE_SESSION_KEY);
+        renderChat();
+
+        await Promise.all([loadWikiPages(), loadConflicts(), loadSessions()]);
         toast(`Switched to "${ws.name}".`);
       } catch (err) { toast(err.message, "error"); }
     });
     listEl.appendChild(item);
+  }
+}
+
+let deletingWorkspaceId = null;
+
+function openDeleteWsModal(ws) {
+  deletingWorkspaceId = ws.id;
+  const nameEl = document.getElementById("deleteWsNameText");
+  if (nameEl) nameEl.textContent = ws.name;
+  const inputEl = document.getElementById("deleteWsInput");
+  if (inputEl) inputEl.value = "";
+  const confirmBtn = document.getElementById("deleteWsConfirmBtn");
+  if (confirmBtn) confirmBtn.disabled = true;
+  const errEl = document.getElementById("deleteWsError");
+  if (errEl) errEl.hidden = true;
+  const modal = document.getElementById("deleteWsModal");
+  if (modal) modal.hidden = false;
+  
+  // Hide dropdown
+  document.getElementById("workspaceDropdown").hidden = true;
+  tier2State.wsDropdownOpen = false;
+}
+
+function closeDeleteWsModal() {
+  deletingWorkspaceId = null;
+  const modal = document.getElementById("deleteWsModal");
+  if (modal) modal.hidden = true;
+}
+
+async function confirmDeleteWorkspace() {
+  if (!deletingWorkspaceId) return;
+  const inputVal = document.getElementById("deleteWsInput").value.trim().toLowerCase();
+  if (inputVal !== "delete") return;
+
+  const btn = document.getElementById("deleteWsConfirmBtn");
+  const errEl = document.getElementById("deleteWsError");
+  if (errEl) errEl.hidden = true;
+  setButtonLoading(btn, true, "Deleting…");
+
+  try {
+    await apiFetch(`${API_WORKSPACES}/${deletingWorkspaceId}`, { method: "DELETE" });
+    toast("Workspace deleted successfully.");
+    closeDeleteWsModal();
+    
+    // Switch to topmost/first remaining workspace
+    await loadWorkspaces();
+
+    // Clear active session and refresh
+    state.currentSessionId = null;
+    state.messages = [];
+    localStorage.removeItem(ACTIVE_SESSION_KEY);
+    renderChat();
+
+    await Promise.all([loadWikiPages(), loadConflicts(), loadSessions()]);
+  } catch (err) {
+    if (errEl) {
+      errEl.textContent = err.message;
+      errEl.hidden = false;
+    }
+  } finally {
+    setButtonLoading(btn, false);
   }
 }
 
@@ -2019,6 +2162,7 @@ function openReportsModal() {
   document.getElementById("reportsModal").hidden = false;
   switchReportTab("templates");
   loadReportTemplates();
+  renderWikiPageSelectionForTemplate();
 }
 
 function closeReportsModal() {
@@ -2093,10 +2237,14 @@ function renderReportTemplates(templates) {
         ${t.description ? `<span class="rt-desc">${escapeHtml(t.description)}</span>` : ""}
       </div>
       <div class="rt-actions">
+        <button class="secondary-button rt-edit-btn" type="button">Edit ✎</button>
         <button class="secondary-button rt-use-btn" data-id="${escapeHtml(t.id)}" data-name="${escapeHtml(t.name)}" type="button">Use →</button>
         <button class="icon-button rt-del-btn" data-id="${escapeHtml(t.id)}" data-name="${escapeHtml(t.name)}" type="button" title="Delete template">🗑</button>
       </div>
     `;
+    row.querySelector(".rt-edit-btn").addEventListener("click", () => {
+      startEditTemplate(t);
+    });
     row.querySelector(".rt-use-btn").addEventListener("click", () => {
       switchReportTab("generate");
       const sel = document.getElementById("genTemplateSelect");
@@ -2142,6 +2290,10 @@ async function saveReportTemplate() {
 
   if (!name) { errEl.textContent = "Template name is required."; errEl.hidden = false; return; }
 
+  // Read selected page scope checkboxes
+  const selectedCheckboxes = document.querySelectorAll('input[name="rtScopeSlug"]:checked');
+  const scope_slugs = Array.from(selectedCheckboxes).map(cb => cb.value);
+
   const colRows = document.querySelectorAll("#rtColumns .rt-col-row");
   const columns = [];
   let hasError = false;
@@ -2162,19 +2314,36 @@ async function saveReportTemplate() {
     return;
   }
 
-  setButtonLoading(btn, true, "Saving…");
+  const isEditing = !!tier2State.editingTemplateId;
+  const url = isEditing 
+    ? `${API_REPORTS}/templates/${tier2State.editingTemplateId}`
+    : `${API_REPORTS}/templates`;
+  const method = isEditing ? "PUT" : "POST";
+
+  setButtonLoading(btn, true, isEditing ? "Updating…" : "Saving…");
   try {
-    await apiFetch(`${API_REPORTS}/templates`, {
-      method: "POST",
+    await apiFetch(url, {
+      method: method,
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, description: desc, columns }),
+      body: JSON.stringify({ name, description: desc, columns, scope_slugs }),
     });
-    toast(`Template "${name}" saved!`);
+    toast(isEditing ? `Template "${name}" updated!` : `Template "${name}" saved!`);
     await loadReportTemplates();
+    
+    // Clear and reset edit state
+    tier2State.editingTemplateId = null;
+    const summaryTitle = document.getElementById("rtSummaryTitle");
+    if (summaryTitle) summaryTitle.textContent = "+ New Template";
+    if (btn) btn.textContent = "Save Template";
+    const cancelBtn = document.getElementById("rtCancelEdit");
+    if (cancelBtn) cancelBtn.hidden = true;
+
     // Reset form
     document.getElementById("rtName").value = "";
     document.getElementById("rtDesc").value = "";
     resetColRows();
+    // Clear page scope checkboxes
+    document.querySelectorAll('input[name="rtScopeSlug"]').forEach(cb => cb.checked = false);
     // Close the details
     document.querySelector(".report-new-template")?.removeAttribute("open");
   } catch (err) {
@@ -2198,6 +2367,84 @@ function resetColRows() {
   container.querySelector(".rt-remove-col").addEventListener("click", () => {
     toast("At least one column is required.", "error");
   });
+}
+
+function startEditTemplate(t) {
+  tier2State.editingTemplateId = t.id;
+  
+  // Update UI headers
+  const summaryTitle = document.getElementById("rtSummaryTitle");
+  if (summaryTitle) summaryTitle.textContent = `✎ Edit Template: ${t.name}`;
+  
+  const saveBtn = document.getElementById("rtSave");
+  if (saveBtn) saveBtn.textContent = "Update Template";
+  
+  const cancelBtn = document.getElementById("rtCancelEdit");
+  if (cancelBtn) cancelBtn.hidden = false;
+  
+  // Open details block if not already open
+  const detailsEl = document.querySelector(".report-new-template");
+  if (detailsEl) detailsEl.setAttribute("open", "");
+  
+  // Fill text fields
+  document.getElementById("rtName").value = t.name || "";
+  document.getElementById("rtDesc").value = t.description || "";
+  
+  // Fill page scope checkboxes
+  const scopes = t.scope_slugs || [];
+  document.querySelectorAll('input[name="rtScopeSlug"]').forEach(cb => {
+    cb.checked = scopes.includes(cb.value);
+  });
+  
+  // Populate columns
+  const container = document.getElementById("rtColumns");
+  if (container) {
+    container.innerHTML = "";
+    const columns = t.columns || [];
+    if (columns.length === 0) {
+      resetColRows();
+    } else {
+      for (const col of columns) {
+        const row = document.createElement("div");
+        row.className = "rt-col-row";
+        row.innerHTML = `
+          <input class="rt-col-key" type="text" placeholder="key (e.g. salary)" title="Unique identifier, no spaces" value="${escapeHtml(col.key)}" />
+          <input class="rt-col-label" type="text" placeholder="Column label (e.g. Salary)" value="${escapeHtml(col.label)}" />
+          <input class="rt-col-instr" type="text" placeholder="Instruction (e.g. Find the annual salary)" value="${escapeHtml(col.instruction)}" />
+          <button class="rt-remove-col icon-button" type="button" title="Remove column">✕</button>
+        `;
+        row.querySelector(".rt-remove-col").addEventListener("click", () => {
+          const allRows = container.querySelectorAll(".rt-col-row");
+          if (allRows.length <= 1) { toast("At least one column is required.", "error"); return; }
+          row.remove();
+        });
+        container.appendChild(row);
+      }
+    }
+  }
+}
+
+function cancelEditTemplate() {
+  tier2State.editingTemplateId = null;
+  
+  const summaryTitle = document.getElementById("rtSummaryTitle");
+  if (summaryTitle) summaryTitle.textContent = "+ New Template";
+  
+  const saveBtn = document.getElementById("rtSave");
+  if (saveBtn) saveBtn.textContent = "Save Template";
+  
+  const cancelBtn = document.getElementById("rtCancelEdit");
+  if (cancelBtn) cancelBtn.hidden = true;
+  
+  // Reset fields
+  document.getElementById("rtName").value = "";
+  document.getElementById("rtDesc").value = "";
+  document.querySelectorAll('input[name="rtScopeSlug"]').forEach(cb => cb.checked = false);
+  resetColRows();
+  
+  // Close the details panel
+  const detailsEl = document.querySelector(".report-new-template");
+  if (detailsEl) detailsEl.removeAttribute("open");
 }
 
 // ---------- Generate ----------

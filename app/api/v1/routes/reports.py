@@ -194,6 +194,30 @@ def delete_template(
     return {"deleted": True}
 
 
+@router.put("/templates/{template_id}", response_model=ReportTemplateOut)
+def update_template(
+    template_id: str,
+    payload: ReportTemplateCreate,
+    user: Annotated[User, Depends(get_current_user)],
+    workspace: Annotated[Workspace, Depends(get_active_workspace_dep)],
+    db: Annotated[Session, Depends(get_db)],
+) -> ReportTemplateOut:
+    member = get_member(db, workspace_id=workspace.id, user_id=user.id)
+    require_role(member, "editor")
+    template = db.get(ReportTemplate, template_id)
+    if not template or template.workspace_id != workspace.id:
+        raise KnowForgeError("Template not found.", status_code=404, code="template_not_found")
+    
+    template.name = payload.name
+    template.description = payload.description
+    template.columns_json = json.dumps([c.model_dump() for c in payload.columns])
+    template.sections_json = json.dumps([s.model_dump() for s in payload.sections])
+    template.scope_slugs_json = json.dumps(payload.scope_slugs)
+    db.commit()
+    db.refresh(template)
+    return _template_out(template)
+
+
 # ---------------------------------------------------------------------------
 # Jobs
 # ---------------------------------------------------------------------------

@@ -170,3 +170,56 @@ def invite_member(
         expires_at=invite.expires_at,
         created_at=invite.created_at,
     )
+
+
+@router.delete("/{workspace_id}", response_model=dict)
+def delete_workspace_route(
+    workspace_id: str,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> dict:
+    requester = get_member(db, workspace_id=workspace_id, user_id=user.id)
+    require_role(requester, "admin")
+
+    # Check how many workspaces the requester has memberships in
+    user_memberships = db.query(WorkspaceMember).filter_by(user_id=user.id).all()
+    if len(user_memberships) <= 1:
+        raise KnowForgeError(
+            "Cannot delete workspace. You must have at least one active workspace.",
+            status_code=400,
+            code="cannot_delete_only_workspace",
+        )
+
+    ws = db.get(Workspace, workspace_id)
+    if not ws:
+        raise KnowForgeError("Workspace not found.", status_code=404, code="workspace_not_found")
+
+    # For every user that is a member of this workspace: update active_workspace_id if it's being deleted
+    members = db.query(WorkspaceMember).filter_by(workspace_id=workspace_id).all()
+    for member in members:
+        user_to_update = member.user
+        if user_to_update.active_workspace_id == workspace_id:
+            # Find their first remaining workspace
+            other_m = db.query(WorkspaceMember).filter(
+                WorkspaceMember.user_id == user_to_update.id,
+                WorkspaceMember.workspace_id != workspace_id
+            ).first()
+            if other_m:
+                user_to_update.active_workspace_id = other_m.workspace_id
+            else:
+                user_to_update.active_workspace_id = None
+
+    # Delete filesystem data
+    import shutil
+    from pathlib import Path
+    from app.core.config import settings
+    storage_root = Path(settings.knowforge_storage_path)
+    workspace_dir = storage_root / "workspaces" / workspace_id
+    if workspace_dir.exists() and workspace_dir.is_dir():
+        shutil.rmtree(workspace_dir)
+
+    # Delete workspace in database
+    db.delete(ws)
+    db.commit()
+
+    return {"deleted": True}

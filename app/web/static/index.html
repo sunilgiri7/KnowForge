@@ -308,10 +308,14 @@
           <div id="reportPanelTemplates">
             <div id="reportTemplateList" class="report-template-list"></div>
             <details class="report-new-template">
-              <summary>+ New Template</summary>
+              <summary id="rtSummaryTitle">+ New Template</summary>
               <div class="report-template-form">
                 <label class="llm-label">Name<input id="rtName" type="text" placeholder="e.g. Vendor Scorecard" /></label>
                 <label class="llm-label">Description<input id="rtDesc" type="text" placeholder="Optional" /></label>
+                <label class="llm-label" style="margin-top: 8px;">Target Wiki Pages (Scope) <span class="muted" style="font-size: 0.85em; font-weight: normal; margin-left: 4px;">(Leave empty to run on all pages)</span></label>
+                <div id="rtPageScopeList" class="rt-page-scope-list">
+                  <!-- Checkboxes populated dynamically from state.wikiPages -->
+                </div>
                 <div id="rtColumns" class="rt-columns">
                   <div class="rt-col-row">
                     <input class="rt-col-key" type="text" placeholder="key" />
@@ -321,7 +325,10 @@
                   </div>
                 </div>
                 <button id="rtAddCol" class="text-button" type="button">+ Add Column</button>
-                <button id="rtSave" class="primary-button" type="button">Save Template</button>
+                <div style="display: flex; align-items: center; gap: 8px; margin-top: 8px;">
+                  <button id="rtSave" class="primary-button" type="button">Save Template</button>
+                  <button id="rtCancelEdit" class="secondary-button" type="button" hidden>Cancel Edit</button>
+                </div>
                 <div id="rtError" class="inline-error" hidden></div>
               </div>
             </details>
@@ -346,6 +353,31 @@
             <button id="refreshJobsBtn" class="secondary-button" type="button">↻ Refresh</button>
             <div id="jobsList" class="jobs-list"></div>
           </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Delete Workspace Confirmation Modal -->
+    <div id="deleteWsModal" class="modal-overlay" hidden>
+      <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="deleteWsTitle" style="max-width: 420px;">
+        <div class="modal-header">
+          <strong id="deleteWsTitle" style="color: var(--danger);">⚠️ Delete Workspace</strong>
+          <button id="deleteWsCloseBtn" class="icon-button" type="button" title="Close">✕</button>
+        </div>
+        <div class="modal-body" style="padding: 16px; display: flex; flex-direction: column; gap: 12px;">
+          <p style="font-size: 13px; line-height: 1.5; margin: 0; color: var(--text);">
+            Are you sure you want to delete the workspace <strong id="deleteWsNameText"></strong>? 
+            This action <strong style="color: var(--danger);">cannot be undone</strong>. All wiki pages, chat histories, templates, and physical source files linked to this workspace will be deleted forever.
+          </p>
+          <label class="llm-label" style="font-weight: 600; margin-top: 8px;">
+            To confirm, please type <span style="color: var(--danger); font-family: monospace; font-size: 1.1em; font-weight: bold; background: var(--line); padding: 2px 6px; border-radius: 4px;">delete</span> below:
+            <input id="deleteWsInput" type="text" placeholder="type 'delete'" style="margin-top: 6px; width: 100%;" />
+          </label>
+          <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px;">
+            <button id="deleteWsCancelBtn" class="secondary-button" type="button">Cancel</button>
+            <button id="deleteWsConfirmBtn" class="primary-button" type="button" style="background-color: var(--danger);" disabled>Confirm Delete</button>
+          </div>
+          <div id="deleteWsError" class="inline-error" hidden></div>
         </div>
       </div>
     </div>
