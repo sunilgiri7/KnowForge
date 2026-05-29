@@ -26,6 +26,8 @@ class WikiPageMeta(BaseModel):
     freshness: Literal["current", "stale", "unknown"] = "current"
     confidence: Literal["high", "medium", "low"] = "medium"
     aliases: list[str] = Field(default_factory=list)
+    entities: list[str] = Field(default_factory=list)
+    related_slugs: list[str] = Field(default_factory=list)
     last_compiled_at: str | None = None
 
 
@@ -40,6 +42,8 @@ class WikiPageUpsert(BaseModel):
     summary: str = ""
     tags: list[str] = Field(default_factory=list)
     source_ids: list[str] = Field(default_factory=list)
+    entities: list[str] = Field(default_factory=list)
+    related_slugs: list[str] = Field(default_factory=list)
     content: str
 
 

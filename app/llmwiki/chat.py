@@ -25,7 +25,6 @@ from app.llmwiki.indexer import WikiIndexer
 from app.llmwiki.prompts import (
     ANSWER_PROMPT,
     DIRECT_CHAT_PROMPT,
-    PLANNER_PROMPT,
     RERANK_PROMPT,
     VERIFIER_PROMPT,
 )
@@ -85,19 +84,8 @@ class ChatService:
         plan = state["plan"]
         decision = plan.decision
         trace = plan.traces
-        context = state.get("context", "")
         used_pages = state.get("used_pages", []) or plan.used_pages
         fallback_ids = state.get("fallback_ids", [])
-
-        # Hard question: add planner sub-question decomposition to trace
-        if decision.difficulty == "hard" and context.strip():
-            plan_notes = await self._plan_hard_question(plan.retrieval_question, context)
-            trace.append(AgentTrace(
-                agent="planner",
-                action="decomposed_question",
-                confidence=0.72,
-                notes=plan_notes,
-            ))
 
         if decision.route == "fallback" and fallback_ids:
             trace.append(AgentTrace(
@@ -325,22 +313,7 @@ class ChatService:
                 f"LLM request failed: {exc.__class__.__name__}",
             )
 
-    # ── Planning and verification ─────────────────────────────────────────────
-
-    async def _plan_hard_question(self, question: str, context: str) -> str:
-        if self.llm.available:
-            try:
-                payload = await self.llm.generate_json(
-                    safe_format(
-                        PLANNER_PROMPT,
-                        question=question,
-                        context=trim_to_chars(context, settings.wiki_context_char_budget),
-                    )
-                )
-                return "; ".join(payload.get("subquestions", [])) or str(payload.get("notes", ""))
-            except Exception:
-                pass
-        return "Use routed wiki pages, check citations, then verify support before final answer."
+    # ── Verification ──────────────────────────────────────────────────────────
 
     async def _verify(self, question: str, context: str, answer: str) -> tuple[bool, str, float]:
         """

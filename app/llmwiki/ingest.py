@@ -8,6 +8,7 @@ from app.core.config import settings
 from app.core.errors import KnowForgeError
 from app.llmwiki.compaction import WikiCompactor
 from app.llmwiki.groq import GroqClient
+from app.llmwiki.knowledge_graph import KnowledgeGraphBuilder, rebuild_all_relations
 from app.llmwiki.prompts import CHUNK_NOTES_PROMPT, COMPILE_PROMPT, SYNTHESIZE_WIKI_PROMPT
 from app.llmwiki.storage import WikiStore
 from app.llmwiki.text import keyword_summary, safe_format, slugify, trim_to_chars
@@ -134,7 +135,19 @@ class SourceIngestor:
             content=content,
             confidence="medium",
         )
-        saved = self.store.upsert_page(page)
+        all_pages = self.store.list_pages()
+        entities, related = KnowledgeGraphBuilder.build_for_page(
+            page=page,
+            all_pages=all_pages,
+            chunk_notes=state.get("chunk_notes"),
+        )
+        page.meta.entities = entities
+        page.meta.related_slugs = related
+        slug_to_title = {item.slug: item.title for item in all_pages}
+        slug_to_title[page.meta.slug] = page.meta.title
+        page.content = KnowledgeGraphBuilder.append_related_section(page, slug_to_title)
+        saved = self.store.upsert_page(page, skip_relink=True)
+        rebuild_all_relations(self.store)
         await self.compactor.compact_if_needed(saved)
         return saved
 

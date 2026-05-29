@@ -44,6 +44,13 @@ class Settings(BaseSettings):
     chat_history_char_budget: int = 6_000
     chat_history_keep_last: int = 6
 
+    kg_max_entities_per_page: int = 40
+    kg_max_related_per_page: int = 12
+    kg_max_hops: int = 1
+    kg_max_hops_hard: int = 2
+    kg_max_pages_in_context: int = 6
+    kg_planner_subquestions: int = 3
+
     db_host: str = "localhost"
     db_port: int = 5432
     db_name: str = "knowforge"

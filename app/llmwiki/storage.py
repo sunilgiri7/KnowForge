@@ -22,6 +22,7 @@ class WikiStore:
         self.events_dir = self.root / "events"
         self.index_path = self.wiki_dir / "index.md"
         self._lock = RLock()
+        self.mutation_revision = 0
         self.ensure_ready()
 
     def for_user(self, user_id: str) -> WikiStore:
@@ -80,13 +81,18 @@ class WikiStore:
             )
         return page_from_markdown(path.read_text(encoding="utf-8"), path.stem)
 
-    def upsert_page(self, page: WikiPage) -> WikiPage:
+    def upsert_page(self, page: WikiPage, *, skip_relink: bool = False) -> WikiPage:
         with self._lock:
             page.meta.slug = slugify(page.meta.slug)
             page.meta.last_compiled_at = page.meta.last_compiled_at or now_iso()
             self._atomic_write(self.page_path(page.meta.slug), render_page(page))
             self.rebuild_index()
-            return page
+            self.mutation_revision += 1
+        if not skip_relink:
+            from app.llmwiki.knowledge_graph import rebuild_all_relations
+
+            rebuild_all_relations(self)
+        return page
 
     def rename_page(self, slug: str, title: str) -> WikiPage:
         with self._lock:
@@ -95,7 +101,12 @@ class WikiStore:
             page.meta.last_compiled_at = now_iso()
             self._atomic_write(self.page_path(page.meta.slug), render_page(page))
             self.rebuild_index()
-            return page
+            self.mutation_revision += 1
+            saved = page
+        from app.llmwiki.knowledge_graph import rebuild_all_relations
+
+        rebuild_all_relations(self)
+        return saved
 
     def delete_page(self, slug: str) -> None:
         path = self.page_path(slug)
@@ -111,6 +122,10 @@ class WikiStore:
             if compact_path.exists():
                 compact_path.unlink()
             self.rebuild_index()
+            self.mutation_revision += 1
+        from app.llmwiki.knowledge_graph import rebuild_all_relations
+
+        rebuild_all_relations(self)
 
     def save_source(self, source_id: str, filename: str, data: bytes, text: str) -> None:
         directory = self.source_dir(source_id)
@@ -164,6 +179,8 @@ class WikiStore:
         summary: str = "",
         tags: list[str] | None = None,
         source_ids: list[str] | None = None,
+        entities: list[str] | None = None,
+        related_slugs: list[str] | None = None,
         confidence: str = "medium",
     ) -> WikiPage:
         clean_slug = slugify(slug or title)
@@ -173,6 +190,8 @@ class WikiStore:
             summary=summary,
             tags=tags or [],
             source_ids=source_ids or [],
+            entities=entities or [],
+            related_slugs=related_slugs or [],
             confidence=confidence,
             last_compiled_at=now_iso(),
         )

@@ -18,10 +18,11 @@ import time
 from collections import Counter
 from dataclasses import dataclass
 
+from app.core.config import settings
+from app.llmwiki.knowledge_graph import WikiKnowledgeGraph
 from app.llmwiki.storage import WikiStore
 from app.llmwiki.text import (
     bm25_score,
-    keyword_summary,
     reciprocal_rank_fusion,
     tokenize,
     trim_to_chars,
@@ -125,11 +126,12 @@ class BM25PageIndex:
     """
 
     FIELD_WEIGHTS: dict[str, float] = {
-        "title":   5.0,
-        "aliases": 3.5,
-        "tags":    3.0,
-        "summary": 2.0,
-        "content": 1.0,
+        "title":    5.0,
+        "aliases":  3.5,
+        "tags":     3.0,
+        "entities": 1.2,
+        "summary":  2.0,
+        "content":  1.0,
     }
     # How many content chars to index — balances coverage vs. index build time
     CONTENT_INDEX_CHARS = 8_000
@@ -272,11 +274,12 @@ class BM25PageIndex:
     @staticmethod
     def _extract_fields(page: WikiPage) -> dict[str, str]:
         return {
-            "title":   page.meta.title,
-            "aliases": " ".join(page.meta.aliases),
-            "tags":    " ".join(page.meta.tags),
-            "summary": page.meta.summary,
-            "content": page.content[: BM25PageIndex.CONTENT_INDEX_CHARS],
+            "title":    page.meta.title,
+            "aliases":  " ".join(page.meta.aliases),
+            "tags":     " ".join(page.meta.tags),
+            "entities": " ".join(page.meta.entities),
+            "summary":  page.meta.summary,
+            "content":  page.content[: BM25PageIndex.CONTENT_INDEX_CHARS],
         }
 
 
@@ -312,7 +315,9 @@ class WikiIndexer:
     def __init__(self, store: WikiStore) -> None:
         self.store = store
         self._bm25 = BM25PageIndex()
+        self._graph = WikiKnowledgeGraph(store)
         self._indexed_page_count = -1
+        self._indexed_mutation_revision = -1
         self._last_rebuild_ts = 0.0
 
     # ── Index management ──────────────────────────────────────────────────────
@@ -320,15 +325,41 @@ class WikiIndexer:
     def _ensure_fresh(self) -> None:
         """Rebuild if stale. O(n) on first call, then in-memory cache."""
         current_count = len(self.store.list_pages())
+        revision = self.store.mutation_revision
         age = time.monotonic() - self._last_rebuild_ts
-        if current_count != self._indexed_page_count or age > self.INDEX_MAX_AGE_SECS:
+        if (
+            current_count != self._indexed_page_count
+            or revision != self._indexed_mutation_revision
+            or age > self.INDEX_MAX_AGE_SECS
+        ):
             self._bm25.rebuild_from_store(self.store)
             self._indexed_page_count = current_count
+            self._indexed_mutation_revision = revision
             self._last_rebuild_ts = time.monotonic()
 
     def invalidate(self) -> None:
         """Force index rebuild on next search (call after page writes)."""
         self._indexed_page_count = -1
+        self._indexed_mutation_revision = -1
+        self._graph.invalidate()
+
+    def expand_with_graph(
+        self,
+        seed_slugs: list[str],
+        question: str,
+        *,
+        max_extra: int = 4,
+        max_hops: int | None = None,
+    ) -> list[str]:
+        """Return seed slugs plus graph-expanded pages (seeds first, deduped)."""
+        cap = min(settings.kg_max_pages_in_context, len(seed_slugs) + max(0, max_extra))
+        hops = max_hops if max_hops is not None else settings.kg_max_hops
+        return self._graph.expand(
+            seed_slugs,
+            question,
+            max_hops=hops,
+            max_pages=cap,
+        )
 
     # ── Routing ───────────────────────────────────────────────────────────────
 

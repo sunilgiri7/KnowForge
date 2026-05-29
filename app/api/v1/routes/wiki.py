@@ -40,6 +40,8 @@ async def upsert_page(
         summary=payload.summary,
         tags=payload.tags,
         source_ids=payload.source_ids,
+        entities=payload.entities,
+        related_slugs=payload.related_slugs,
         content=payload.content,
         confidence="high",
     )

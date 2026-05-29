@@ -20,9 +20,14 @@ from dataclasses import dataclass, field
 from app.core.config import settings
 from app.llmwiki.groq import GroqClient
 from app.llmwiki.indexer import PageCandidate, WikiIndexer
-from app.llmwiki.prompts import HYDE_PROMPT, QUERY_EXPANSION_PROMPT, QUERY_REWRITE_PROMPT
+from app.llmwiki.prompts import (
+    HYDE_PROMPT,
+    PLANNER_PROMPT,
+    QUERY_EXPANSION_PROMPT,
+    QUERY_REWRITE_PROMPT,
+)
 from app.llmwiki.storage import WikiStore
-from app.llmwiki.text import safe_format, tokenize
+from app.llmwiki.text import safe_format, tokenize, trim_to_chars
 from app.schemas.llmwiki import AgentTrace, ChatRequest, RouteDecision
 
 
@@ -221,6 +226,17 @@ class AIHarness:
 
         traces.append(self._trace_decision(decision))
 
+        # ── Knowledge graph + planner-driven multi-hop retrieval ─────────────
+        if decision.route in ("wiki", "fallback") and decision.page_slugs:
+            expanded_slugs, kg_traces = await self._expand_retrieval_slugs(
+                decision=decision,
+                retrieval_question=retrieval_question,
+                candidate_queries=candidate_queries,
+            )
+            traces.extend(kg_traces)
+            if expanded_slugs != decision.page_slugs:
+                decision = decision.model_copy(update={"page_slugs": expanded_slugs})
+
         # ── Context assembly ──────────────────────────────────────────────────
         context_budget = self._context_char_budget_for_route(request, decision)
         if decision.route in ("wiki", "fallback") or request.intent == "wiki":
@@ -319,6 +335,97 @@ class AIHarness:
             return str(payload.get("passage", "")).strip()
         except Exception:
             return ""
+
+    async def _expand_retrieval_slugs(
+        self,
+        *,
+        decision: RouteDecision,
+        retrieval_question: str,
+        candidate_queries: list[str],
+    ) -> tuple[list[str], list[AgentTrace]]:
+        traces: list[AgentTrace] = []
+        seed_slugs = list(decision.page_slugs)
+        max_hops = settings.kg_max_hops
+        if decision.difficulty == "hard" and decision.confidence < 0.75:
+            max_hops = settings.kg_max_hops_hard
+
+        expanded = self.indexer.expand_with_graph(
+            seed_slugs,
+            retrieval_question,
+            max_hops=max_hops,
+        )
+        added = [s for s in expanded if s not in seed_slugs]
+        if added:
+            traces.append(
+                AgentTrace(
+                    agent="knowledge_graph",
+                    action="expanded_pages",
+                    confidence=0.74,
+                    notes=f"Graph expansion added: {', '.join(added)}",
+                )
+            )
+
+        if decision.difficulty == "hard" and self.llm.available:
+            planner_context = ""
+            if expanded:
+                planner_context, _ = self.indexer.build_context(
+                    expanded[:2],
+                    retrieval_question,
+                    char_budget=min(settings.wiki_context_char_budget, 6_000),
+                )
+            subquestions = await self._planner_subquestions(retrieval_question, planner_context)
+            planner_added: list[str] = []
+            for subq in subquestions[: settings.kg_planner_subquestions]:
+                candidates = self.indexer.find_candidates(
+                    subq,
+                    limit=2,
+                    candidate_queries=candidate_queries,
+                )
+                for cand in candidates:
+                    if cand.slug not in expanded:
+                        expanded.append(cand.slug)
+                        planner_added.append(cand.slug)
+                    if len(expanded) >= settings.kg_max_pages_in_context:
+                        break
+                if len(expanded) >= settings.kg_max_pages_in_context:
+                    break
+            if subquestions:
+                traces.append(
+                    AgentTrace(
+                        agent="planner",
+                        action="retrieval_subquestions",
+                        confidence=0.72,
+                        notes="; ".join(subquestions[: settings.kg_planner_subquestions]),
+                    )
+                )
+            if planner_added:
+                traces.append(
+                    AgentTrace(
+                        agent="knowledge_graph",
+                        action="planner_expanded_pages",
+                        confidence=0.70,
+                        notes=f"Planner retrieval added: {', '.join(planner_added)}",
+                    )
+                )
+
+        return expanded[: settings.kg_max_pages_in_context], traces
+
+    async def _planner_subquestions(self, question: str, context: str) -> list[str]:
+        if not self.llm.available:
+            return []
+        try:
+            payload = await self.llm.generate_json(
+                safe_format(
+                    PLANNER_PROMPT,
+                    question=question,
+                    context=trim_to_chars(context, settings.wiki_context_char_budget),
+                ),
+                temperature=0.1,
+            )
+            raw = payload.get("subquestions", [])
+            return [str(item).strip() for item in raw if str(item).strip()]
+        except Exception:
+            return []
 
     # ── Memory helpers ────────────────────────────────────────────────────────
 
