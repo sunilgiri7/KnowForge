@@ -1773,7 +1773,7 @@ body.resizing-sidebar {
 /* =========================================================
    TIER 2 — Reports Modal
    ========================================================= */
-.reports-card { width: min(700px, 100%); max-height: 82vh; display: flex; flex-direction: column; }
+.reports-card { width: min(820px, 95vw); max-height: 85vh; display: flex; flex-direction: column; }
 .reports-body { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; padding-top: 8px; }
 .reports-tabs { display: flex; gap: 6px; margin-bottom: 8px; }
 .report-template-list { display: grid; gap: 8px; }
@@ -1791,10 +1791,13 @@ body.resizing-sidebar {
 .report-new-template summary { cursor: pointer; font-size: 13px; font-weight: 650; color: var(--accent); }
 .report-template-form { display: grid; gap: 10px; margin-top: 12px; }
 .rt-columns { display: grid; gap: 8px; }
-.rt-col-row { display: flex; gap: 6px; align-items: center; }
-.rt-col-row input { flex: 1; min-height: 36px; padding: 7px 10px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); color: var(--ink); }
+.rt-col-row { display: flex; gap: 8px; align-items: center; width: 100%; }
+.rt-col-row input { min-height: 36px; padding: 7px 10px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); color: var(--ink); }
 .rt-col-row input:focus { border-color: var(--accent); outline: none; }
-.rt-remove-col { flex: 0; color: var(--danger); }
+.rt-col-key { flex: 0 0 100px; width: 100px; }
+.rt-col-label { flex: 0 0 150px; width: 150px; }
+.rt-col-instr { flex: 1; min-width: 0; }
+.rt-remove-col { flex: 0 0 auto; color: var(--danger); }
 .jobs-list { display: grid; gap: 8px; }
 .jobs-empty { text-align: center; padding: 32px 16px; color: var(--muted); }
 .jobs-empty-icon { font-size: 32px; margin-bottom: 8px; }

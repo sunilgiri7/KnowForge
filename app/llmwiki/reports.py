@@ -48,6 +48,19 @@ Wiki page content:
 {content}
 """
 
+KNOWLEDGE_EXTRACTION_PROMPT = """\
+You are an intelligent knowledge base assistant. Answer the following questions/extraction columns using your own internal knowledge. Do NOT look up or expect any wiki documents.
+Return a JSON object with one key per column (using the column key as the JSON key).
+
+Each value should be an object with:
+  - value: your answer as a string (or "" if you do not know)
+  - confidence: float 0.0–1.0 (1.0 = highly certain, 0.5 = uncertain, 0.0 = completely unknown)
+  - quote: null (since you are answering from your own knowledge)
+
+Columns to answer:
+{columns_spec}
+"""
+
 
 # ---------------------------------------------------------------------------
 # Extractor
@@ -107,6 +120,47 @@ class ReportExtractor:
                 cells[col.key] = ExtractedCell(value="", confidence=0.0, source_slug=slug)
 
         return ExtractedRow(page_slug=slug, page_title=page.meta.title, cells=cells)
+
+    async def extract_without_context(
+        self,
+        *,
+        columns: list[ReportColumnDef],
+    ) -> ExtractedRow:
+        columns_spec = "\n".join(
+            f"- key={col.key}: {col.label}. Instruction: {col.instruction}"
+            for col in columns
+        )
+
+        cells: dict[str, ExtractedCell] = {}
+
+        if self.llm.available:
+            try:
+                raw = await self.llm.generate_json(
+                    safe_format(
+                        KNOWLEDGE_EXTRACTION_PROMPT,
+                        columns_spec=columns_spec,
+                    ),
+                    temperature=0.3,
+                )
+                for col in columns:
+                    cell_raw = raw.get(col.key, {})
+                    if isinstance(cell_raw, dict):
+                        cells[col.key] = ExtractedCell(
+                            value=str(cell_raw.get("value", "")),
+                            confidence=float(cell_raw.get("confidence", 0.0)),
+                            source_slug="llm_knowledge",
+                            quote=None,
+                        )
+                    else:
+                        cells[col.key] = ExtractedCell(value=str(cell_raw), source_slug="llm_knowledge")
+            except Exception:
+                for col in columns:
+                    cells[col.key] = ExtractedCell(value="", confidence=0.0, source_slug="llm_knowledge")
+        else:
+            for col in columns:
+                cells[col.key] = ExtractedCell(value="", confidence=0.0, source_slug="llm_knowledge")
+
+        return ExtractedRow(page_slug="llm_knowledge", page_title="LLM Internal Knowledge", cells=cells)
 
 
 # ---------------------------------------------------------------------------
@@ -271,18 +325,16 @@ class ReportRunner:
             columns = [ReportColumnDef(**c) for c in json.loads(template.columns_json)]
             scope_slugs = json.loads(template.scope_slugs_json or "[]")
 
-            # Determine pages to extract from
-            if scope_slugs:
-                slugs = scope_slugs
-            else:
-                slugs = [item.slug for item in self.store.list_pages()]
-
             extractor = ReportExtractor(self.store, self.llm)
             rows: list[ExtractedRow] = []
-            for slug in slugs:
-                row = await extractor.extract_page(slug=slug, columns=columns)
-                if row:
-                    rows.append(row)
+            if scope_slugs:
+                for slug in scope_slugs:
+                    row = await extractor.extract_page(slug=slug, columns=columns)
+                    if row:
+                        rows.append(row)
+            else:
+                row = await extractor.extract_without_context(columns=columns)
+                rows.append(row)
 
             job.results_json = json.dumps([r.model_dump() for r in rows])
 
