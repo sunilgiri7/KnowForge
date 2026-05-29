@@ -25,7 +25,6 @@ idna==3.16
 iniconfig==2.3.0
 jsonpatch==1.33
 jsonpointer==3.1.1
--e git+https://sunilgiri7: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@github.com/sunilgiri7/KnowForge.git@c4cd6538579a671d65f78cb5bac8585279e7a518#egg=knowforge
 langchain==0.3.30
 langchain-core==0.3.86
 langchain-text-splitters==0.3.11
