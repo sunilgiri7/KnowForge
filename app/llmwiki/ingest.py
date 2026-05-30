@@ -105,7 +105,7 @@ class SourceIngestor:
             pages = []
             total_chars = 0
             for index, page in enumerate(reader.pages, start=1):
-                page_text = page.extract_text() or ""
+                page_text = page.extract_text(extraction_mode="layout") or ""
                 if not page_text.strip():
                     continue
                 block = f"\n\n--- Page {index} ---\n\n{page_text}"
@@ -358,6 +358,18 @@ class SourceIngestor:
         return bool(_MULTI_NUMBER_RE.search(stripped))
 
     @staticmethod
+    def _is_structured_or_tabular(line: str) -> bool:
+        """Check if a line contains tabs, consecutive spaces, or matches the multi-number regex."""
+        stripped = line.strip()
+        if not stripped:
+            return False
+        if "\t" in stripped or "  " in stripped:
+            return True
+        if _MULTI_NUMBER_RE.search(stripped):
+            return True
+        return False
+
+    @staticmethod
     def _clean_extracted_text(text: str) -> str:
         lines = []
         previous_clean = ""
@@ -368,15 +380,24 @@ class SourceIngestor:
                     lines.append(stripped)
                 previous_clean = stripped
                 continue
+
+            is_structured = SourceIngestor._is_structured_or_tabular(raw_line)
             had_indent = raw_line[:1].isspace()
             had_bullet = stripped.startswith(("\x7f", "•", "-", "*"))
-            line = " ".join(stripped.replace("\x7f", "-").replace("•", "-").split()).strip()
+
+            if is_structured:
+                # Keep spacing layout intact for tabular column alignments
+                line = stripped.replace("\x7f", "-").replace("•", "-")
+            else:
+                # Normal paragraph line: collapse spaces
+                line = " ".join(stripped.replace("\x7f", "-").replace("•", "-").split()).strip()
+
             line = line.lstrip("- ").strip() if had_bullet else line
             if not line or line == previous_clean:
                 continue
 
             # Never join a structured data line with its predecessor — insert a blank separator
-            if SourceIngestor._looks_like_structured_data(line):
+            if is_structured or SourceIngestor._looks_like_structured_data(line):
                 previous_clean = line
                 lines.append(line)
                 continue
@@ -409,9 +430,9 @@ class SourceIngestor:
         if SourceIngestor._looks_like_label(current):
             return False
         # Never join structured/tabular data lines
-        if SourceIngestor._looks_like_structured_data(current):
+        if SourceIngestor._looks_like_structured_data(current) or SourceIngestor._is_structured_or_tabular(current):
             return False
-        if SourceIngestor._looks_like_structured_data(previous):
+        if SourceIngestor._looks_like_structured_data(previous) or SourceIngestor._is_structured_or_tabular(previous):
             return False
         if "@" in current or "|" in current:
             return False

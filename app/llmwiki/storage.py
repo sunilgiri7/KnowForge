@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import tempfile
@@ -24,6 +25,16 @@ class WikiStore:
         self._lock = RLock()
         self.mutation_revision = 0
         self.ensure_ready()
+
+    @property
+    def _workspace_id(self) -> str:
+        """Derive a stable workspace ID from the store root path."""
+        return str(self.root).replace("/", "_").strip("_")
+
+    def _get_vector_store(self):
+        """Lazy-import VectorStore to avoid circular deps and stay graceful."""
+        from app.llmwiki.vector_store import VectorStore
+        return VectorStore(self._workspace_id)
 
     def for_user(self, user_id: str) -> WikiStore:
         return WikiStore(self.root / "users" / user_id)
@@ -95,8 +106,22 @@ class WikiStore:
             self.mutation_revision += 1
         if not skip_relink:
             from app.llmwiki.knowledge_graph import rebuild_all_relations
-
             rebuild_all_relations(self)
+        # Async vector upsert — fire-and-forget, never blocks page save
+        try:
+            vs = self._get_vector_store()
+            if vs.available:
+                asyncio.create_task(
+                    vs.upsert_page(
+                        slug=page.meta.slug,
+                        title=page.meta.title,
+                        summary=page.meta.summary,
+                        content=page.content,
+                    )
+                )
+        except RuntimeError:
+            # No running event loop (e.g. called from sync test context) — skip
+            pass
         return page
 
     def rename_page(self, slug: str, title: str) -> WikiPage:
@@ -129,8 +154,14 @@ class WikiStore:
             self.rebuild_index()
             self.mutation_revision += 1
         from app.llmwiki.knowledge_graph import rebuild_all_relations
-
         rebuild_all_relations(self)
+        # Remove vectors from Pinecone — fire-and-forget
+        try:
+            vs = self._get_vector_store()
+            if vs.available:
+                asyncio.create_task(vs.delete_page(slug))
+        except RuntimeError:
+            pass
 
     def save_source(self, source_id: str, filename: str, data: bytes, text: str) -> None:
         directory = self.source_dir(source_id)

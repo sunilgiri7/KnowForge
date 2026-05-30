@@ -1,18 +1,21 @@
 """
-indexer.py — BM25-powered wiki retrieval engine.
+indexer.py — Hybrid BM25 + Semantic vector retrieval engine.
 
-Key improvements over v1:
+Key capabilities:
   - BM25PageIndex: in-memory multi-field inverted index; builds once, searches
     in microseconds instead of doing O(n) disk reads per query.
-  - Multi-query RRF merging: each query variant runs independently, results
-    merged via Reciprocal Rank Fusion for better recall.
-  - Better snippet extraction: sentence-level BM25 paragraph scoring + ±1
+  - Semantic vector search via Pinecone (all-MiniLM-L6-v2 embeddings, 384-dim).
+  - Hybrid RRF fusion: BM25 ranked list + vector ranked list merged via
+    Reciprocal Rank Fusion with configurable weight split.
+  - Multi-query expansion: original + rewrite + step-back + keyword variants
+    all passed to BM25; merged via RRF for better recall.
+  - Better snippet extraction: sentence-level paragraph scoring + ±1
     expansion for narrative continuity + table preservation.
-  - Calibrated routing thresholds derived from BM25 field-weight sums rather
-    than the 0.0-1.0 overlap ratio used in v1.
+  - Calibrated routing thresholds derived from BM25 field-weight sums.
 """
 from __future__ import annotations
 
+import asyncio
 import re
 import threading
 import time
@@ -75,19 +78,17 @@ SELF_PROFILE_TERMS = {
 }
 
 VAGUE_DOC_TERMS = {
-    "abstract",
-    "agreement",
-    "architecture",
-    "benchmark",
-    "compensation",
-    "contract",
-    "method",
-    "notice",
-    "paper",
-    "research",
-    "results",
-    "salary",
-    "termination",
+    # Contract / agreement types
+    "abstract", "agreement", "architecture", "benchmark", "contract",
+    "method", "notice", "paper", "policy", "provision", "research",
+    "results", "section", "termination",
+    # Financial / HR (the most common query category)
+    "allowance", "benefits", "bonus", "breakdown", "compensation",
+    "component", "ctc", "deduction", "earnings", "gross", "incentive",
+    "netpay", "package", "pay", "payslip", "salary", "structure", "tax",
+    # Personal document terms
+    "certification", "clause", "details", "education", "employment",
+    "joining", "leave", "offer", "probation", "qualification",
 }
 
 
@@ -138,8 +139,10 @@ class BM25PageIndex:
         "content":  1.0,
     }
 
-    # How many content chars to index — balances coverage vs. index build time
-    CONTENT_INDEX_CHARS = 8_000
+    # How many content chars to index.
+    # Must be large enough to cover salary tables, clause lists, etc.
+    # that appear deep in compiled employment/contract wiki pages.
+    CONTENT_INDEX_CHARS = 24_000
 
     def __init__(self) -> None:
         self._lock = threading.RLock()
@@ -295,24 +298,28 @@ class BM25PageIndex:
 
 class WikiIndexer:
     """
-    Retrieval layer wrapping BM25PageIndex.
+    Hybrid retrieval layer: BM25 (lexical) + Pinecone (semantic).
 
     Routing thresholds
     ------------------
-    BM25 scores are unbounded (sum of IDF × TF_norm across fields, weighted).
+    BM25 scores are unbounded (sum of IDF x TF_norm across fields, weighted).
     With the field weights above, a perfect title+tag+summary match on a
-    medium-sized wiki typically scores 12–25.  Thresholds below are calibrated
+    medium-sized wiki typically scores 12-25.  Thresholds below are calibrated
     against this range:
 
-        ≥ 9.0  → very strong match (confident wiki route)
-        ≥ 6.0  → good match (wiki route, slightly lower confidence)
-        ≥ 3.5  → reasonable match (wiki route for explicit wiki-intent queries)
-        ≥ 1.5  → marginal (wiki route only when user explicitly asked for wiki)
-        < 1.5  → direct LLM
+        >= 9.0  -> very strong match (confident wiki route)
+        >= 6.0  -> good match (wiki route, slightly lower confidence)
+        >= 3.5  -> reasonable match (wiki route for explicit wiki-intent queries)
+        >= 1.5  -> marginal (wiki route only when user explicitly asked for wiki)
+        <  1.5  -> direct LLM
 
-    These beat the v1 thresholds (0.28 / 0.45 / 0.72 on a 0-1 normalised
-    overlap ratio) because BM25 IDF discounts common terms, so the signal is
-    cleaner.
+    Hybrid fusion
+    -------------
+    When Pinecone is configured, vector search results are RRF-merged with BM25
+    results using the hybrid_vector_weight setting (default 0.5):
+      - BM25 ranked list -> RRF score weighted by (1 - hybrid_vector_weight)
+      - Vector ranked list -> RRF score weighted by hybrid_vector_weight
+    This combination captures both keyword precision and semantic similarity.
     """
 
     # Rebuild the in-memory index if either condition is met:
@@ -326,6 +333,14 @@ class WikiIndexer:
         self._indexed_page_count = -1
         self._indexed_mutation_revision = -1
         self._last_rebuild_ts = 0.0
+        # Lazy VectorStore — only initialised if Pinecone key is configured
+        self._vector_store = None
+        if settings.pinecone_api_key:
+            try:
+                from app.llmwiki.vector_store import VectorStore
+                self._vector_store = VectorStore(store._workspace_id)
+            except Exception:
+                pass
 
     # ── Index management ──────────────────────────────────────────────────────
 
@@ -351,26 +366,63 @@ class WikiIndexer:
         self._graph.invalidate()
 
     def resolve_slug_mentions(self, question: str) -> list[str]:
-        """Match explicit wiki slugs mentioned in the user's question."""
+        """
+        Match wiki pages explicitly referenced in the user question.
+
+        Three layers:
+        1. Exact slug match ("employment-agreement-sunil-giri" in question)
+        2. Hyphenated token regex match
+        3. Title-word overlap — if ≥2 significant words from a page title
+           appear in the question, treat it as an explicit reference.
+        4. Entity name match — if a named entity stored in page metadata
+           (e.g. "Sunil Giri", "AcoBloom International") appears verbatim
+           in the question, route to that page.
+        """
         self._ensure_fresh()
-        known = {item.slug for item in self.store.list_pages()}
-        if not known:
+        pages = self.store.list_pages()
+        if not pages:
             return []
 
+        known = {item.slug for item in pages}
         found: list[str] = []
         seen: set[str] = set()
         lowered = question.lower()
+        q_tokens = set(tokenize(question))
 
+        # Layer 1: exact slug substring
         for slug in sorted(known, key=len, reverse=True):
             if slug in lowered and slug not in seen:
                 seen.add(slug)
                 found.append(slug)
 
+        # Layer 2: hyphenated-token pattern
         for match in _SLUG_TOKEN_RE.findall(question):
             candidate = match.lower()
             if candidate in known and candidate not in seen:
                 seen.add(candidate)
                 found.append(candidate)
+
+        # Layer 3: title-word overlap (≥2 significant title tokens in question)
+        for item in pages:
+            if item.slug in seen:
+                continue
+            title_tokens = set(tokenize(item.title))
+            # Require at least 2 meaningful overlapping words
+            overlap = title_tokens & q_tokens
+            if len(overlap) >= 2:
+                seen.add(item.slug)
+                found.append(item.slug)
+
+        # Layer 4: entity name match (person names, org names, etc.)
+        for item in pages:
+            if item.slug in seen:
+                continue
+            for entity in item.tags[:20]:          # tags store key entities/topics
+                entity_clean = entity.strip().lower()
+                if len(entity_clean) >= 4 and entity_clean in lowered:
+                    seen.add(item.slug)
+                    found.append(item.slug)
+                    break
 
         return found
 
@@ -488,18 +540,29 @@ class WikiIndexer:
         candidate_queries: list[str] | None = None,
     ) -> list[PageCandidate]:
         """
-        Multi-query BM25 retrieval with RRF merging.
+        Hybrid retrieval: BM25 (lexical) + Pinecone vector (semantic), fused via RRF.
 
-        Each distinct query runs through BM25 independently.  Results are fused
-        via Reciprocal Rank Fusion: a slug that appears in the top-5 of three
-        different query variants scores higher than one that appears only once,
-        even if that single appearance had a higher raw BM25 score.  This gives
-        better recall without sacrificing precision.
+        Step 1 — BM25 retrieval:
+          Each distinct query variant runs through BM25 independently.
+          Results fused via RRF across all variants.
+
+        Step 2 — Vector retrieval (when Pinecone is configured):
+          The original question is embedded and queried against Pinecone.
+          Returns top-k slugs sorted by cosine similarity.
+
+        Step 3 — Hybrid RRF fusion:
+          BM25 slug list and vector slug list are merged via weighted RRF:
+            RRF_hybrid(slug) = w_bm25 * RRF_bm25(slug) + w_vec * RRF_vec(slug)
+          w_bm25 = 1 - hybrid_vector_weight
+          w_vec  = hybrid_vector_weight
+
+        This approach is used in production by Cohere, Weaviate, Elastic and
+        Pinecone's own hybrid search documentation.
         """
         self._ensure_fresh()
         all_queries = [question, *(candidate_queries or [])]
 
-        # De-duplicate by sorted token set to avoid trivially identical queries
+        # ── Step 1: BM25 retrieval ────────────────────────────────────────────
         ranked_lists: list[list[str]] = []
         seen: set[str] = set()
         for query in all_queries:
@@ -513,25 +576,67 @@ class WikiIndexer:
                 ranked_lists.append([slug for slug, _ in results])
 
         if not ranked_lists:
-            return []
-
-        # Single query: use raw BM25 scores for accurate confidence values
-        if len(ranked_lists) == 1:
+            bm25_slug_scores: dict[str, float] = {}
+        elif len(ranked_lists) == 1:
             terms = tokenize(question)
             raw = self._bm25.search(terms, limit=limit)
-            slug_score = dict(raw)
+            bm25_slug_scores = dict(raw)
         else:
             merged = reciprocal_rank_fusion(ranked_lists, k=60)
-            slug_score = dict(merged[: limit * 2])
+            bm25_slug_scores = dict(merged[: limit * 2])
 
-        # Hydrate page objects (one disk read per candidate, not per query)
+        # ── Step 2: Vector retrieval (async in sync context via asyncio) ──────
+        vector_slug_scores: dict[str, float] = {}
+        if self._vector_store and self._vector_store.available:
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    # We are inside an async context — schedule and await
+                    import concurrent.futures
+                    future = asyncio.run_coroutine_threadsafe(
+                        self._vector_store.query(question, top_k=limit * 2),
+                        loop,
+                    )
+                    vector_results = future.result(timeout=5)
+                else:
+                    vector_results = loop.run_until_complete(
+                        self._vector_store.query(question, top_k=limit * 2)
+                    )
+                vector_slug_scores = dict(vector_results)
+            except Exception:
+                vector_slug_scores = {}
+
+        # ── Step 3: Weighted RRF fusion ───────────────────────────────────────
+        w_vec = settings.hybrid_vector_weight
+        w_bm25 = 1.0 - w_vec
+        k = 60  # RRF rank constant
+
+        all_slugs = set(bm25_slug_scores) | set(vector_slug_scores)
+
+        if not all_slugs:
+            return []
+
+        # Sort each list independently for rank-based scoring
+        bm25_ranked = sorted(bm25_slug_scores, key=lambda s: bm25_slug_scores[s], reverse=True)
+        vec_ranked   = sorted(vector_slug_scores, key=lambda s: vector_slug_scores[s], reverse=True)
+
+        bm25_rank = {slug: rank for rank, slug in enumerate(bm25_ranked, start=1)}
+        vec_rank  = {slug: rank for rank, slug in enumerate(vec_ranked, start=1)}
+
+        hybrid_scores: dict[str, float] = {}
+        for slug in all_slugs:
+            rrf_bm25 = w_bm25 / (k + bm25_rank[slug]) if slug in bm25_rank else 0.0
+            rrf_vec  = w_vec  / (k + vec_rank[slug])  if slug in vec_rank  else 0.0
+            hybrid_scores[slug] = rrf_bm25 + rrf_vec
+
+        # ── Hydrate page objects ──────────────────────────────────────────────
         candidates: list[PageCandidate] = []
-        for slug, score in sorted(slug_score.items(), key=lambda x: x[1], reverse=True)[
-            :limit
-        ]:
+        for slug, score in sorted(hybrid_scores.items(), key=lambda x: x[1], reverse=True)[:limit]:
             try:
                 page = self.store.read_page(slug, prefer_compact=True)
-                candidates.append(PageCandidate(slug=slug, score=score, page=page))
+                # Use BM25 raw score for routing confidence (more calibrated than RRF float)
+                raw_bm25 = bm25_slug_scores.get(slug, 0.0)
+                candidates.append(PageCandidate(slug=slug, score=raw_bm25, page=page))
             except Exception:
                 pass
         return candidates
@@ -551,8 +656,14 @@ class WikiIndexer:
         remaining = char_budget
         for slug in slugs:
             page = self.store.read_page(slug, prefer_compact=True)
+            # Give each page the full remaining budget divided by pages left.
+            # Previously //3 was too aggressive — a long employment agreement
+            # needs >4000 chars to include both the compensation clause AND the
+            # Addendum IV salary breakdown table.
+            pages_left = max(1, len(slugs) - len(used))
+            per_page_budget = max(4000, remaining // pages_left)
             snippet = self._page_snippet(
-                page, query_terms, max_chars=max(2400, remaining // 3)
+                page, query_terms, max_chars=min(per_page_budget, remaining - 800)
             )
             block = (
                 f"[wiki:{page.meta.slug}] {page.meta.title}\n"
@@ -643,57 +754,174 @@ class WikiIndexer:
     @staticmethod
     def _page_snippet(page: WikiPage, query_terms: set[str], *, max_chars: int) -> str:
         """
-        Sentence-aware snippet extraction with context expansion.
-
-        Algorithm
-        ---------
-        1. Split content into paragraphs (double-newline separated).
-        2. Score each paragraph by query-term overlap, with bonuses for:
-           - Markdown tables (high information density)
-           - Section headings (navigation signal)
-        3. Select top-20 scoring paragraphs.
-        4. Expand selection ±1 to preserve narrative continuity.
-        5. Reassemble in original document order.
-        6. Trim to char budget.
-
-        If no paragraph has keyword overlap (e.g. numeric tables), fall back
-        to full content — never silently drop structured data.
+        Sentence-aware snippet extraction with budget-aware selection and pruning.
         """
         paragraphs = [p.strip() for p in page.content.split("\n\n") if p.strip()]
         if not paragraphs:
             return trim_to_chars(page.content, max_chars)
 
+        _STOP_WORDS = {
+            "a", "about", "above", "after", "again", "against", "all", "am", "an",
+            "and", "any", "are", "as", "at", "be", "because", "been", "before", "being",
+            "below", "between", "both", "but", "by", "can", "did", "do", "does", "doing",
+            "don", "down", "during", "each", "few", "for", "from", "further", "had",
+            "has", "have", "having", "he", "her", "here", "hers", "herself", "him",
+            "himself", "his", "how", "i", "if", "in", "into", "is", "it", "its", "itself",
+            "me", "more", "most", "my", "myself", "no", "nor", "not", "of", "off", "on",
+            "once", "only", "or", "other", "our", "ours", "ourselves", "out", "over",
+            "own", "same", "she", "should", "so", "some", "such", "than", "that", "the",
+            "their", "theirs", "them", "themselves", "then", "there", "these", "they",
+            "this", "those", "through", "to", "too", "under", "until", "up", "very",
+            "was", "we", "were", "what", "when", "where", "which", "while", "who", "whom",
+            "why", "with", "you", "your", "yours", "yourself", "yourselves"
+        }
+
+        def count_financial_numbers(text: str) -> int:
+            tokens = re.findall(r"\b\d[\d,.]*\b", text)
+            count = 0
+            for t in tokens:
+                if t.count(".") > 1:
+                    continue  # section numbers like 2.1.1
+                clean = t.replace(",", "").replace(".", "")
+                if clean.isdigit():
+                    val = int(clean)
+                    # Financial/salary values are typically between 100 and 2,000,000
+                    if 100 <= val <= 2000000:
+                        count += 1
+            return count
+
+        _HEADING_RE = re.compile(r"^#{1,4}\s+(.+)$")
+        _CURRENCY_CHAR_RE = re.compile(r"[₹$€£,]")
+
+        meaningful_query_terms = query_terms - _STOP_WORDS
+
+        # Classify query type using meaningful query terms
+        _FINANCIAL_TERMS = {
+            "salary", "structure", "pay", "netpay", "compensation", "allowance",
+            "deduction", "benefits", "ctc", "gross", "basic", "hra", "package",
+            "earnings", "breakdown", "component", "incentive", "tax", "amount",
+        }
+        _EDUCATION_TERMS = {
+            "qualifications", "certification", "education", "degree", "diploma",
+            "gpa", "marks", "percentage", "university", "college", "school",
+        }
+        is_financial_query = bool(meaningful_query_terms & _FINANCIAL_TERMS)
+        is_education_query = bool(meaningful_query_terms & _EDUCATION_TERMS)
+
+        _SALARY_COMPONENTS = {
+            "basic", "hra", "conveyance", "allowance", "allowances", "ctc", "net pay", "netpay",
+            "gross salary", "gross", "deduction", "deductions", "provident", "pf", "bonus",
+            "gratuity", "medical insurance", "inr", "rupees", "particulars"
+        }
+        _EDUCATION_COMPONENTS = {
+            "btech", "degree", "diploma", "gpa", "marks", "percentage", "university", "college",
+            "school", "passing year", "year of passing", "specialization"
+        }
+
+        # Track the nearest preceding heading's tokens for each paragraph
+        current_heading_tokens: set[str] = set()
+        para_heading_tokens: list[set[str]] = []
+        for para in paragraphs:
+            m = _HEADING_RE.match(para)
+            if m:
+                current_heading_tokens = (set(tokenize(m.group(1))) - _STOP_WORDS)
+            para_heading_tokens.append(current_heading_tokens.copy())
+
         scored: list[tuple[int, float, str]] = []
         for idx, para in enumerate(paragraphs):
             para_terms = set(tokenize(para))
-            overlap = len(query_terms & para_terms)
+            meaningful_para_terms = para_terms - _STOP_WORDS
+            overlap = len(meaningful_query_terms & meaningful_para_terms)
 
-            # Structural bonuses (tables are almost always relevant for Q&A)
             is_table = para.startswith("|") or "|---|" in para or "| --- |" in para
             is_heading = para.startswith(("##", "###", "# "))
-            structural_bonus = 0.35 if is_table else (0.10 if is_heading else 0.0)
 
-            # Normalise by query length so short queries don't penalise long paras
-            score = (overlap / max(1, len(query_terms))) + structural_bonus
+            # Heading contains query terms?
+            ancestor_overlap = len(meaningful_query_terms & para_heading_tokens[idx])
+            heading_context_bonus = 0.50 if ancestor_overlap > 0 else 0.0
+
+            # Table bonus
+            table_bonus = 0.40 if is_table else 0.0
+
+            # Number density bonus (crucial for numerical queries)
+            num_count = count_financial_numbers(para)
+            currency_count = len(_CURRENCY_CHAR_RE.findall(para))
+            number_density = min(num_count * 0.08 + currency_count * 0.10, 0.70)
+            if is_financial_query:
+                number_density *= 2.0
+
+            # Keyword overlap score
+            kw_score = overlap / max(1, len(meaningful_query_terms))
+
+            # Heading bonus
+            heading_bonus = 0.15 if is_heading else 0.0
+
+            # Addendum / Appendix bonus
+            is_addendum = any(kw in para.lower() for kw in ("addendum", "appendix", "schedule", "annex"))
+            addendum_bonus = 0.35 if is_addendum else 0.0
+
+            # Component matching bonus (boosts exact domain tables/breakdowns)
+            component_bonus = 0.0
+            lower_para = para.lower()
+            if is_financial_query:
+                matching_components = [c for c in _SALARY_COMPONENTS if c in lower_para]
+                component_bonus = min(len(matching_components) * 0.20, 1.0)
+            elif is_education_query:
+                matching_components = [c for c in _EDUCATION_COMPONENTS if c in lower_para]
+                component_bonus = min(len(matching_components) * 0.20, 1.0)
+
+            score = kw_score + table_bonus + number_density + heading_context_bonus + heading_bonus + addendum_bonus + component_bonus
             scored.append((idx, score, para))
 
-        # Top-20 by score
-        top_indices = {
-            idx
-            for idx, sc, _ in sorted(scored, key=lambda x: x[1], reverse=True)[:20]
-            if sc > 0
-        }
-        # Expand ±1 for context cohesion
-        expanded: set[int] = set()
-        for idx in top_indices:
-            expanded.update({max(0, idx - 1), idx, min(len(paragraphs) - 1, idx + 1)})
+        # Sort paragraphs by score descending to prioritize high-value content
+        sorted_by_score = sorted(scored, key=lambda x: x[1], reverse=True)
 
-        selected = [
-            p for idx, _, p in sorted(scored, key=lambda x: x[0]) if idx in expanded and p
-        ]
+        selected_indices = set()
+        seed_count = 0
+        max_seeds = 5  # limit seeds to avoid noise flooding when budget is large
+        
+        # We greedily add the highest scoring paragraphs and their ±2/±1 context
+        # as long as the total length stays under max_chars.
+        for idx, score, para in sorted_by_score:
+            if score <= 0.05:
+                continue
+            if seed_count >= max_seeds:
+                break
+            
+            # Context expansion: try to add the paragraph and its neighbors
+            # We use max(0, idx - 2) to capture introductory paragraphs/subheadings
+            # preceding tables or sections (e.g. Basic and HRA headers for salary tables).
+            neighbors = {max(0, idx - 2), max(0, idx - 1), idx, min(len(paragraphs) - 1, idx + 1)}
+            new_indices = selected_indices | neighbors
+            
+            # Calculate total character length if we include this neighborhood
+            total_len = sum(len(paragraphs[i]) + 2 for i in new_indices)
+            
+            if total_len <= max_chars:
+                selected_indices = new_indices
+                seed_count += 1
+            else:
+                # If neighborhood doesn't fit, try to add just this paragraph
+                new_indices_solo = selected_indices | {idx}
+                total_len_solo = sum(len(paragraphs[i]) + 2 for i in new_indices_solo)
+                if total_len_solo <= max_chars:
+                    selected_indices = new_indices_solo
+                    seed_count += 1
+                # If even the paragraph alone doesn't fit, keep searching for smaller high-scoring paras
 
-        if not selected:
-            # Fallback: structured/numerical content may have no term overlap
+        # Fallback: if nothing got selected (e.g. extremely low scores), fill budget from the beginning
+        if not selected_indices:
+            current_len = 0
+            for idx, para in enumerate(paragraphs):
+                if current_len + len(para) + 2 <= max_chars:
+                    selected_indices.add(idx)
+                    current_len += len(para) + 2
+                else:
+                    break
+
+        if not selected_indices:
             return trim_to_chars(page.content, max_chars)
 
-        return trim_to_chars("\n\n".join(selected), max_chars)
+        # Assemble selected paragraphs in original document order to preserve coherence
+        selected_paragraphs = [paragraphs[i] for i in sorted(selected_indices)]
+        return "\n\n".join(selected_paragraphs)

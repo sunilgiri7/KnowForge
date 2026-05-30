@@ -108,10 +108,30 @@ class AIHarness:
                 reason=reason,
                 difficulty=self.indexer.classify_difficulty(request.question, []),
             )
-            context, used_pages = self.indexer.build_exact_page_context(
-                decision.page_slugs,
-                char_budget=settings.wiki_context_char_budget,
-            )
+            # If the user explicitly selected the page, or the slug is named in the question,
+            # but the page is very long, we should use snippet extraction to prevent LLM distraction.
+            # Otherwise, use exact page context.
+            use_exact = True
+            for slug in decision.page_slugs:
+                try:
+                    p = self.indexer.store.read_page(slug)
+                    if len(p.content) > 12000:
+                        use_exact = False
+                        break
+                except Exception:
+                    pass
+
+            if use_exact:
+                context, used_pages = self.indexer.build_exact_page_context(
+                    decision.page_slugs,
+                    char_budget=settings.wiki_context_char_budget,
+                )
+            else:
+                context, used_pages = self.indexer.build_context(
+                    decision.page_slugs,
+                    request.question,
+                    char_budget=settings.wiki_context_char_budget,
+                )
             traces.append(self._trace_decision(decision))
             if not request.context_page_slugs and selected_slugs:
                 traces.append(
@@ -185,10 +205,12 @@ class AIHarness:
                     notes="; ".join(new_variants),
                 ))
 
-        # 3. HyDE: hypothetical passage for semantic retrieval coverage
-        #    Only run for wiki/memory intent — not worth the LLM call for simple
-        #    greetings or direct coding questions.
-        if (memory_hint or rewrite_hint or request.intent == "wiki") and self.llm.available:
+        # 3. HyDE: hypothetical passage for semantic retrieval coverage.
+        #    Fire for memory, rewrite-hinted, explicit wiki-mode, OR any
+        #    document/financial intent — these queries need the vocabulary
+        #    bridge most (e.g. "salary structure" → "compensation breakdown").
+        wiki_intent_hint = self.indexer.has_wiki_intent(request.question)
+        if (memory_hint or rewrite_hint or wiki_intent_hint or request.intent == "wiki") and self.llm.available:
             hyde = await self._hyde_passage(request.question)
             if hyde:
                 candidate_queries.append(hyde)
@@ -233,6 +255,27 @@ class AIHarness:
                     candidates,
                     "Harness override: wiki context found via expanded query.",
                 )
+
+        # Harness override: any query with explicit wiki/document intent
+        # (salary, contract, benefits, pay, etc.) should never go direct when
+        # there are wiki pages available — the BM25 threshold is too strict for
+        # small corpora where IDF is compressed.
+        if decision.route == "direct" and self.indexer.has_wiki_intent(request.question):
+            candidates = self.indexer.find_candidates(
+                retrieval_question, limit=4, candidate_queries=candidate_queries
+            )
+            if candidates:
+                decision = self._wiki_decision_from_candidates(
+                    retrieval_question,
+                    candidates,
+                    "Harness override: document-intent query rerouted to wiki.",
+                )
+                traces.append(AgentTrace(
+                    agent="wiki_intent_override",
+                    action="forced_wiki_route",
+                    confidence=decision.confidence,
+                    notes="Query contained document/financial intent terms; BM25 score was below threshold but wiki pages exist.",
+                ))
 
         if request.intent == "wiki" and decision.route == "direct":
             candidates = self.indexer.find_candidates(

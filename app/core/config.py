@@ -35,7 +35,7 @@ class Settings(BaseSettings):
     max_pdf_upload_bytes: int = 100 * 1024 * 1024
     pdf_extract_char_limit: int = 1_200_000
     wiki_context_char_budget: int = 40_000
-    chat_context_char_budget: int = 12_000
+    chat_context_char_budget: int = 18_000  # raised from 12k to fit long docs with tables
     chat_prompt_token_budget: int = 5_500
     chat_max_completion_tokens: int = 900
     wiki_page_soft_char_limit: int = 120_000
@@ -80,6 +80,14 @@ class Settings(BaseSettings):
     llm_key_encryption_secret: str | None = None
 
     openrouter_default_model: str = "openai/gpt-4o-mini"
+
+    # ── Pinecone / Vector Search (optional) ──────────────────────────────────
+    # When set, KnowForge enables hybrid retrieval (BM25 + semantic vectors).
+    # Leave blank to run in pure BM25 mode — the system degrades gracefully.
+    pinecone_api_key: str | None = None
+    pinecone_index_name: str = "knowforge"
+    # Hybrid fusion weight: 0.0 = pure BM25, 1.0 = pure vector. 0.5 = balanced.
+    hybrid_vector_weight: float = 0.5
 
     @property
     def resolved_database_url(self) -> str:

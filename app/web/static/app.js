@@ -450,7 +450,11 @@ function renderMarkdownBlock(block) {
   }
   if (/^#{1,3}\s+/.test(lines[0])) {
     const text = lines[0].replace(/^#{1,3}\s+/, "");
-    return `<p><strong>${renderInlineMarkdown(text)}</strong></p>`;
+    const headingHtml = `<p><strong>${renderInlineMarkdown(text)}</strong></p>`;
+    if (lines.length > 1) {
+      return headingHtml + renderMarkdown(lines.slice(1).join("\n"));
+    }
+    return headingHtml;
   }
   return `<p>${lines.map((line) => renderInlineMarkdown(line)).join("<br />")}</p>`;
 }
