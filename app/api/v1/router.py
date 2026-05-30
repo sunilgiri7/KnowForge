@@ -11,6 +11,7 @@ from app.api.v1.routes.sources import router as sources_router
 from app.api.v1.routes.versions import router as versions_router
 from app.api.v1.routes.wiki import router as wiki_router
 from app.api.v1.routes.workspaces import router as workspaces_router
+from app.api.v1.routes.research import router as research_router
 
 api_router = APIRouter()
 api_router.include_router(health_router)
@@ -24,3 +25,4 @@ api_router.include_router(contradictions_router)
 api_router.include_router(workspaces_router)
 api_router.include_router(promotions_router)
 api_router.include_router(reports_router)
+api_router.include_router(research_router)

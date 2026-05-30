@@ -55,6 +55,7 @@ const state = {
   sidebarResizing: false,
   llmProviderTouched: false,
   reportModeActive: false,
+  llmKeysConnected: false,
 };
 
 const els = {
@@ -256,6 +257,21 @@ function closeLlmModal() {
   document.body.classList.remove("modal-open");
 }
 
+function updateServiceStatus(apiOk = true, errorMsg = "") {
+  if (!els.networkState) return;
+  els.networkState.classList.remove("text-danger");
+  if (!apiOk) {
+    els.networkState.textContent = errorMsg || "Offline / API Issue";
+    els.networkState.classList.add("text-danger");
+    return;
+  }
+  if (state.llmKeysConnected) {
+    els.networkState.textContent = "Custom LLM Key Active";
+  } else {
+    els.networkState.textContent = "Default LLM Active";
+  }
+}
+
 function setLlmUi({ connected, provider }) {
   els.llmError.hidden = true;
   els.llmError.textContent = "";
@@ -268,8 +284,6 @@ function setLlmUi({ connected, provider }) {
   els.llmStatusPill.classList.toggle("muted", !connected);
   els.llmStatusPill.classList.toggle("connected", !!connected);
   els.llmStatusPill.classList.toggle("disconnected", !connected);
-  els.llmSettingsBtn?.classList.toggle("llm-connected", !!connected);
-  els.llmSettingsBtn?.classList.toggle("llm-disconnected", !connected);
   updateProviderLogo();
   updateApiKeyPlaceholder();
 }
@@ -278,6 +292,17 @@ async function loadLlmStatus(options = {}) {
   const { preferActiveProvider = false } = options;
   try {
     const items = await apiFetch(API.llmKeys);
+    
+    // Highlight the settings button with green if any provider is connected, red if none.
+    const anyConnected = Array.isArray(items) ? items.some((x) => x.connected) : false;
+    state.llmKeysConnected = anyConnected;
+    updateServiceStatus(true);
+    
+    if (els.llmSettingsBtn) {
+      els.llmSettingsBtn.classList.toggle("llm-connected", anyConnected);
+      els.llmSettingsBtn.classList.toggle("llm-disconnected", !anyConnected);
+    }
+
     const active = Array.isArray(items) ? items.find((x) => x.active) : null;
     if ((preferActiveProvider && active?.provider) || (!state.llmProviderTouched && active?.provider)) {
       els.llmProviderSelect.value = active.provider;
@@ -287,6 +312,12 @@ async function loadLlmStatus(options = {}) {
     setLlmUi({ connected: !!current?.connected, provider });
     updateModelOptions({ provider, selectedModel: current?.model || "" });
   } catch (error) {
+    state.llmKeysConnected = false;
+    updateServiceStatus(true);
+    if (els.llmSettingsBtn) {
+      els.llmSettingsBtn.classList.remove("llm-connected");
+      els.llmSettingsBtn.classList.add("llm-disconnected");
+    }
     setLlmUi({ connected: false, provider: els.llmProviderSelect.value });
     updateModelOptions({ provider: els.llmProviderSelect.value, selectedModel: "" });
   }
@@ -506,14 +537,14 @@ async function apiFetch(url, options = {}) {
       const message = body?.error?.message || body?.detail || body || `Request failed: ${response.status}`;
       throw new Error(Array.isArray(message) ? message.map((item) => item.msg).join(", ") : message);
     }
-    els.networkState.textContent = "Connected to local API";
+    updateServiceStatus(true);
     return body;
   } catch (error) {
     if (error.name === "AbortError") {
-      els.networkState.textContent = "Request timed out";
+      updateServiceStatus(false, "Request timed out");
       throw new Error("Request timed out. The AI model or system took too long to respond. Please try again.");
     }
-    els.networkState.textContent = "API connection issue";
+    updateServiceStatus(false, "API connection issue");
     throw error;
   } finally {
     clearTimeout(timeout);
@@ -785,7 +816,23 @@ function renderMessageNode(message, children, depth) {
           const jobId = match[1];
           const urlParams = new URLSearchParams(href.split("?")[1] || "");
           const format = urlParams.get("format") || "xlsx";
-          downloadReportFile(jobId, format);
+          const token = state.token || "";
+          fetch(`/api/v1/reports/${jobId}/download`, { headers: { Authorization: `Bearer ${token}` } })
+            .then(res => {
+              if (!res.ok) return res.json().then(d => { throw new Error(d.detail?.message || "Download failed"); });
+              return res.blob();
+            })
+            .then(blob => {
+              const ext = format || "bin";
+              const a = document.createElement("a");
+              a.href = URL.createObjectURL(blob);
+              a.download = `report_${jobId.slice(0, 8)}.${ext}`;
+              document.body.appendChild(a);
+              a.click();
+              setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 2000);
+              toast("Report downloaded!");
+            })
+            .catch(err => toast(err.message, "error"));
         }
       });
     }
@@ -1814,7 +1861,6 @@ bootstrapAuth();
 // =============================================================================
 const API_WORKSPACES = "/api/v1/workspaces";
 const API_PROMOTIONS = "/api/v1/promotions";
-const API_REPORTS = "/api/v1/reports";
 
 let tier2State = {
   workspaces: [],
@@ -1879,9 +1925,6 @@ function bindTier2Events() {
     } catch (err) { toast(err.message, "error"); }
   });
 
-  // Reports button
-  document.getElementById("reportsBtn")?.addEventListener("click", () => openReportsModal());
-
   // Versions modal
   document.getElementById("versionsCloseBtn")?.addEventListener("click", () => {
     document.getElementById("versionsModal").hidden = true;
@@ -1904,43 +1947,6 @@ function bindTier2Events() {
       document.getElementById("saveWikiModal").hidden = true;
   });
   document.getElementById("saveWikiSubmitBtn")?.addEventListener("click", submitPromotion);
-
-  // Reports modal
-  document.getElementById("reportsCloseBtn")?.addEventListener("click", closeReportsModal);
-  document.getElementById("reportsModal")?.addEventListener("click", (e) => {
-    if (e.target === document.getElementById("reportsModal"))
-      closeReportsModal();
-  });
-  document.getElementById("reportTabTemplates")?.addEventListener("click", () => switchReportTab("templates"));
-  document.getElementById("reportTabGenerate")?.addEventListener("click", () => switchReportTab("generate"));
-  document.getElementById("reportTabJobs")?.addEventListener("click", () => switchReportTab("jobs"));
-  document.getElementById("rtAddCol")?.addEventListener("click", addColumnRow);
-  document.getElementById("rtSave")?.addEventListener("click", saveReportTemplate);
-  document.getElementById("rtCancelEdit")?.addEventListener("click", cancelEditTemplate);
-  document.getElementById("rtFormat")?.addEventListener("change", (e) => {
-    const isDoc = e.target.value !== "xlsx";
-    document.getElementById("rtColumnsGroup").style.display = isDoc ? "none" : "block";
-    document.getElementById("rtTargetInstructionGroup").style.display = isDoc ? "flex" : "none";
-  });
-  document.getElementById("genTemplateSelect")?.addEventListener("change", (e) => {
-    const templateId = e.target.value;
-    if (!templateId) return;
-    const t = tier2State.reportTemplates.find(x => x.id === templateId);
-    if (!t) return;
-    const isDoc = t.columns && t.columns.length === 1 && t.columns[0].key === "content";
-    const formatSelect = document.getElementById("genFormatSelect");
-    if (formatSelect) {
-      if (isDoc) {
-        if (formatSelect.value === "xlsx") {
-          formatSelect.value = "pdf";
-        }
-      } else {
-        formatSelect.value = "xlsx";
-      }
-    }
-  });
-  document.getElementById("genRunBtn")?.addEventListener("click", runReportGeneration);
-  document.getElementById("refreshJobsBtn")?.addEventListener("click", () => loadReportJobs());
 
   // Global close dropdown
   window.addEventListener("click", () => {
@@ -2241,516 +2247,7 @@ function wireMessageSaveBtn(articleEl, message) {
 }
 
 // =============================================================================
-// TIER 2 — Reports Modal (fully working)
-// =============================================================================
 
-let reportPollTimer = null;  // interval handle for auto-refresh
-
-function openReportsModal() {
-  document.getElementById("reportsModal").hidden = false;
-  switchReportTab("templates");
-  loadReportTemplates();
-  renderWikiPageSelectionForTemplate();
-}
-
-function closeReportsModal() {
-  document.getElementById("reportsModal").hidden = true;
-  // Stop polling when modal is closed
-  if (reportPollTimer) { clearInterval(reportPollTimer); reportPollTimer = null; }
-}
-
-function switchReportTab(tab) {
-  tier2State.activeReportTab = tab;
-  ["templates", "generate", "jobs"].forEach(t => {
-    const btn = document.getElementById(`reportTab${t.charAt(0).toUpperCase() + t.slice(1)}`);
-    const panel = document.getElementById(`reportPanel${t.charAt(0).toUpperCase() + t.slice(1)}`);
-    if (btn) btn.classList.toggle("active", t === tab);
-    if (panel) panel.hidden = t !== tab;
-  });
-  if (tab === "generate") {
-    loadReportTemplatesIntoSelect();
-    // Reset generate UI
-    const statusEl = document.getElementById("genStatus");
-    if (statusEl) statusEl.hidden = true;
-    const genBtn = document.getElementById("genRunBtn");
-    if (genBtn) { genBtn.disabled = false; genBtn.textContent = "Generate Report"; }
-  }
-  if (tab === "jobs") {
-    loadReportJobs();
-    // Start polling every 4s while on jobs tab
-    if (reportPollTimer) clearInterval(reportPollTimer);
-    reportPollTimer = setInterval(() => {
-      if (tier2State.activeReportTab === "jobs" && !document.getElementById("reportsModal").hidden) {
-        loadReportJobs(true);  // silent refresh
-      } else {
-        clearInterval(reportPollTimer);
-        reportPollTimer = null;
-      }
-    }, 4000);
-  } else {
-    if (reportPollTimer) { clearInterval(reportPollTimer); reportPollTimer = null; }
-  }
-}
-
-// ---------- Templates ----------
-
-async function loadReportTemplates() {
-  const el = document.getElementById("reportTemplateList");
-  if (!el) return;
-  try {
-    const templates = await apiFetch(`${API_REPORTS}/templates`);
-    tier2State.reportTemplates = templates;
-    renderReportTemplates(templates);
-  } catch (err) {
-    el.innerHTML = `<p class="inline-error">Failed to load templates: ${escapeHtml(err.message)}</p>`;
-  }
-}
-
-function renderReportTemplates(templates) {
-  const el = document.getElementById("reportTemplateList");
-  if (!el) return;
-  if (!templates.length) {
-    el.innerHTML = `<p class="empty-mini">No templates yet — create one below ↓</p>`;
-    return;
-  }
-  el.innerHTML = "";
-  for (const t of templates) {
-    const row = document.createElement("div");
-    row.className = "report-template-row";
-    const colNames = (t.columns || []).map(c => c.label).join(", ") || "—";
-    row.innerHTML = `
-      <div class="rt-info">
-        <strong>${escapeHtml(t.name)}</strong>
-        <span class="rt-cols-preview" title="${escapeHtml(colNames)}">${t.columns?.length || 0} column${t.columns?.length !== 1 ? "s" : ""}: ${escapeHtml(colNames.slice(0, 60))}${colNames.length > 60 ? "…" : ""}</span>
-        ${t.description ? `<span class="rt-desc">${escapeHtml(t.description)}</span>` : ""}
-      </div>
-      <div class="rt-actions">
-        <button class="secondary-button rt-edit-btn" type="button">Edit ✎</button>
-        <button class="secondary-button rt-use-btn" data-id="${escapeHtml(t.id)}" data-name="${escapeHtml(t.name)}" type="button">Use →</button>
-        <button class="icon-button rt-del-btn" data-id="${escapeHtml(t.id)}" data-name="${escapeHtml(t.name)}" type="button" title="Delete template">🗑</button>
-      </div>
-    `;
-    row.querySelector(".rt-edit-btn").addEventListener("click", () => {
-      startEditTemplate(t);
-    });
-    row.querySelector(".rt-use-btn").addEventListener("click", () => {
-      switchReportTab("generate");
-      const sel = document.getElementById("genTemplateSelect");
-      if (sel) sel.value = t.id;
-    });
-    row.querySelector(".rt-del-btn").addEventListener("click", async () => {
-      if (!confirm(`Delete template "${t.name}"? This cannot be undone.`)) return;
-      try {
-        await apiFetch(`${API_REPORTS}/templates/${t.id}`, { method: "DELETE" });
-        toast("Template deleted.");
-        await loadReportTemplates();
-      } catch (err) { toast(err.message, "error"); }
-    });
-    el.appendChild(row);
-  }
-}
-
-function addColumnRow() {
-  const container = document.getElementById("rtColumns");
-  const row = document.createElement("div");
-  row.className = "rt-col-row";
-  row.innerHTML = `
-    <input class="rt-col-key" type="text" placeholder="key (e.g. salary)" title="Unique identifier, no spaces" />
-    <input class="rt-col-label" type="text" placeholder="Column label (e.g. Salary)" />
-    <input class="rt-col-instr" type="text" placeholder="Instruction (e.g. Find the annual salary)" />
-    <button class="rt-remove-col icon-button" type="button" title="Remove column">✕</button>
-  `;
-  row.querySelector(".rt-remove-col").addEventListener("click", () => {
-    // Don't allow removing the last column
-    const allRows = container.querySelectorAll(".rt-col-row");
-    if (allRows.length <= 1) { toast("At least one column is required.", "error"); return; }
-    row.remove();
-  });
-  container.appendChild(row);
-}
-
-async function saveReportTemplate() {
-  const name = document.getElementById("rtName").value.trim();
-  const desc = document.getElementById("rtDesc").value.trim();
-  const format = document.getElementById("rtFormat").value;
-  const errEl = document.getElementById("rtError");
-  const btn = document.getElementById("rtSave");
-  errEl.hidden = true;
-
-  if (!name) { errEl.textContent = "Template name is required."; errEl.hidden = false; return; }
-
-  // Read selected page scope checkboxes
-  const selectedCheckboxes = document.querySelectorAll('input[name="rtScopeSlug"]:checked');
-  const scope_slugs = Array.from(selectedCheckboxes).map(cb => cb.value);
-
-  const columns = [];
-  if (format !== "xlsx") {
-    const instr = document.getElementById("rtTargetInstruction").value.trim();
-    if (!instr) {
-      errEl.textContent = "Target extraction instruction is required.";
-      errEl.hidden = false;
-      return;
-    }
-    columns.push({ key: "content", label: "Content", instruction: instr });
-  } else {
-    const colRows = document.querySelectorAll("#rtColumns .rt-col-row");
-    let hasError = false;
-    for (const row of colRows) {
-      const key = row.querySelector(".rt-col-key").value.trim().replace(/\s+/g, "_").toLowerCase();
-      const label = row.querySelector(".rt-col-label").value.trim();
-      const instr = row.querySelector(".rt-col-instr").value.trim();
-      if (!key || !label || !instr) {
-        errEl.textContent = "All column fields (key, label, instruction) must be filled in.";
-        errEl.hidden = false;
-        hasError = true;
-        break;
-      }
-      columns.push({ key, label, instruction: instr });
-    }
-    if (hasError) return;
-    if (!columns.length) {
-      errEl.textContent = "At least one column is required.";
-      errEl.hidden = false;
-      return;
-    }
-  }
-
-  const isEditing = !!tier2State.editingTemplateId;
-  const url = isEditing 
-    ? `${API_REPORTS}/templates/${tier2State.editingTemplateId}`
-    : `${API_REPORTS}/templates`;
-  const method = isEditing ? "PUT" : "POST";
-
-  setButtonLoading(btn, true, isEditing ? "Updating…" : "Saving…");
-  try {
-    await apiFetch(url, {
-      method: method,
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, description: desc, columns, scope_slugs }),
-    });
-    toast(isEditing ? `Template "${name}" updated!` : `Template "${name}" saved!`);
-    await loadReportTemplates();
-    
-    // Clear and reset edit state
-    tier2State.editingTemplateId = null;
-    const summaryTitle = document.getElementById("rtSummaryTitle");
-    if (summaryTitle) summaryTitle.textContent = "+ New Template";
-    if (btn) btn.textContent = "Save Template";
-    const cancelBtn = document.getElementById("rtCancelEdit");
-    if (cancelBtn) cancelBtn.hidden = true;
-
-    // Reset form
-    document.getElementById("rtName").value = "";
-    document.getElementById("rtDesc").value = "";
-    resetColRows();
-    // Clear page scope checkboxes
-    document.querySelectorAll('input[name="rtScopeSlug"]').forEach(cb => cb.checked = false);
-    // Close the details
-    document.querySelector(".report-new-template")?.removeAttribute("open");
-  } catch (err) {
-    errEl.textContent = err.message;
-    errEl.hidden = false;
-  } finally {
-    setButtonLoading(btn, false);
-  }
-}
-
-function resetColRows() {
-  const container = document.getElementById("rtColumns");
-  if (!container) return;
-  container.innerHTML = `<div class="rt-col-row">
-    <input class="rt-col-key" type="text" placeholder="key (e.g. salary)" title="Unique identifier, no spaces" />
-    <input class="rt-col-label" type="text" placeholder="Column label (e.g. Salary)" />
-    <input class="rt-col-instr" type="text" placeholder="Instruction (e.g. Find the annual salary)" />
-    <button class="rt-remove-col icon-button" type="button" title="Remove column">✕</button>
-  </div>`;
-  // Wire the first row remove btn
-  container.querySelector(".rt-remove-col").addEventListener("click", () => {
-    toast("At least one column is required.", "error");
-  });
-}
-
-function startEditTemplate(t) {
-  tier2State.editingTemplateId = t.id;
-  
-  // Update UI headers
-  const summaryTitle = document.getElementById("rtSummaryTitle");
-  if (summaryTitle) summaryTitle.textContent = `✎ Edit Template: ${t.name}`;
-  
-  const saveBtn = document.getElementById("rtSave");
-  if (saveBtn) saveBtn.textContent = "Update Template";
-  
-  const cancelBtn = document.getElementById("rtCancelEdit");
-  if (cancelBtn) cancelBtn.hidden = false;
-  
-  // Open details block if not already open
-  const detailsEl = document.querySelector(".report-new-template");
-  if (detailsEl) detailsEl.setAttribute("open", "");
-  
-  // Fill text fields
-  document.getElementById("rtName").value = t.name || "";
-  document.getElementById("rtDesc").value = t.description || "";
-  
-  // Fill page scope checkboxes
-  const scopes = t.scope_slugs || [];
-  document.querySelectorAll('input[name="rtScopeSlug"]').forEach(cb => {
-    cb.checked = scopes.includes(cb.value);
-  });
-  
-  const isDoc = t.columns && t.columns.length === 1 && t.columns[0].key === "content";
-  const formatSelect = document.getElementById("rtFormat");
-  const colsGroup = document.getElementById("rtColumnsGroup");
-  const instrGroup = document.getElementById("rtTargetInstructionGroup");
-
-  if (isDoc) {
-    formatSelect.value = "pdf";
-    document.getElementById("rtTargetInstruction").value = t.columns[0].instruction || "";
-    colsGroup.style.display = "none";
-    instrGroup.style.display = "flex";
-  } else {
-    formatSelect.value = "xlsx";
-    document.getElementById("rtTargetInstruction").value = "";
-    colsGroup.style.display = "block";
-    instrGroup.style.display = "none";
-
-    // Populate columns
-    const container = document.getElementById("rtColumns");
-    if (container) {
-      container.innerHTML = "";
-      const columns = t.columns || [];
-      if (columns.length === 0) {
-        resetColRows();
-      } else {
-        for (const col of columns) {
-          const row = document.createElement("div");
-          row.className = "rt-col-row";
-          row.innerHTML = `
-            <input class="rt-col-key" type="text" placeholder="key (e.g. salary)" title="Unique identifier, no spaces" value="${escapeHtml(col.key)}" />
-            <input class="rt-col-label" type="text" placeholder="Column label (e.g. Salary)" value="${escapeHtml(col.label)}" />
-            <input class="rt-col-instr" type="text" placeholder="Instruction (e.g. Find the annual salary)" value="${escapeHtml(col.instruction)}" />
-            <button class="rt-remove-col icon-button" type="button" title="Remove column">✕</button>
-          `;
-          row.querySelector(".rt-remove-col").addEventListener("click", () => {
-            const allRows = container.querySelectorAll(".rt-col-row");
-            if (allRows.length <= 1) { toast("At least one column is required.", "error"); return; }
-            row.remove();
-          });
-          container.appendChild(row);
-        }
-      }
-    }
-  }
-}
-
-function cancelEditTemplate() {
-  tier2State.editingTemplateId = null;
-  
-  const summaryTitle = document.getElementById("rtSummaryTitle");
-  if (summaryTitle) summaryTitle.textContent = "+ New Template";
-  
-  const saveBtn = document.getElementById("rtSave");
-  if (saveBtn) saveBtn.textContent = "Save Template";
-  
-  const cancelBtn = document.getElementById("rtCancelEdit");
-  if (cancelBtn) cancelBtn.hidden = true;
-  
-  // Reset fields
-  document.getElementById("rtName").value = "";
-  document.getElementById("rtDesc").value = "";
-  document.getElementById("rtFormat").value = "xlsx";
-  document.getElementById("rtTargetInstruction").value = "";
-  document.getElementById("rtColumnsGroup").style.display = "block";
-  document.getElementById("rtTargetInstructionGroup").style.display = "none";
-  
-  document.querySelectorAll('input[name="rtScopeSlug"]').forEach(cb => cb.checked = false);
-  resetColRows();
-  
-  // Close the details panel
-  const detailsEl = document.querySelector(".report-new-template");
-  if (detailsEl) detailsEl.removeAttribute("open");
-}
-
-// ---------- Generate ----------
-
-function loadReportTemplatesIntoSelect() {
-  const sel = document.getElementById("genTemplateSelect");
-  if (!sel) return;
-  const prev = sel.value;
-  sel.innerHTML = "";
-  if (!tier2State.reportTemplates.length) {
-    sel.innerHTML = `<option value="">— No templates yet, create one first —</option>`;
-    return;
-  }
-  for (const t of tier2State.reportTemplates) {
-    const opt = document.createElement("option");
-    opt.value = t.id;
-    const isDoc = t.columns && t.columns.length === 1 && t.columns[0].key === "content";
-    opt.textContent = `${t.name} ${isDoc ? "[Document]" : "[Tabular]"}`;
-    sel.appendChild(opt);
-  }
-  if (prev) sel.value = prev;
-}
-
-async function runReportGeneration() {
-  const templateId = document.getElementById("genTemplateSelect").value;
-  const exportFormat = document.getElementById("genFormatSelect").value;
-  const statusEl = document.getElementById("genStatus");
-  const genBtn = document.getElementById("genRunBtn");
-  statusEl.hidden = true;
-
-  if (!templateId) {
-    statusEl.textContent = "Please select a template first.";
-    statusEl.style.color = "var(--danger)";
-    statusEl.hidden = false;
-    return;
-  }
-
-  setButtonLoading(genBtn, true, "Starting…");
-  try {
-    const job = await apiFetch(`${API_REPORTS}/generate`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ template_id: templateId, export_format: exportFormat }),
-    });
-
-    // Show success and switch to jobs tab immediately
-    statusEl.textContent = `✓ Job started! ID: ${job.id.slice(0, 8)}… Switching to Jobs tab…`;
-    statusEl.style.color = "var(--accent)";
-    statusEl.hidden = false;
-
-    // Track job ID for polling
-    tier2State.activeJobId = job.id;
-
-    setTimeout(() => {
-      switchReportTab("jobs");
-    }, 800);
-
-  } catch (err) {
-    statusEl.textContent = err.message;
-    statusEl.style.color = "var(--danger)";
-    statusEl.hidden = false;
-  } finally {
-    setButtonLoading(genBtn, false);
-  }
-}
-
-// ---------- Jobs ----------
-
-async function loadReportJobs(silent = false) {
-  const el = document.getElementById("jobsList");
-  if (!el) return;
-
-  if (!silent) {
-    el.innerHTML = `<div class="jobs-loading"><span class="spinner-sm"></span> Loading jobs…</div>`;
-  }
-
-  try {
-    const jobs = await apiFetch(`${API_REPORTS}`);
-    tier2State.reportJobs = jobs;
-    renderJobsList(jobs);
-  } catch (err) {
-    if (!silent) {
-      el.innerHTML = `<p class="inline-error">Failed to load jobs: ${escapeHtml(err.message)}</p>`;
-    }
-  }
-}
-
-function renderJobsList(jobs) {
-  const el = document.getElementById("jobsList");
-  if (!el) return;
-  el.innerHTML = "";
-
-  if (!jobs.length) {
-    el.innerHTML = `<div class="jobs-empty">
-      <div class="jobs-empty-icon">📋</div>
-      <p>No report jobs yet.</p>
-      <p style="color:var(--muted);font-size:12px">Go to the Generate tab to create your first report.</p>
-    </div>`;
-    return;
-  }
-
-  for (const job of jobs) {
-    const row = document.createElement("div");
-    row.className = "job-row";
-    row.dataset.jobId = job.id;
-
-    const ts = job.created_at ? new Date(job.created_at).toLocaleString() : "";
-    const completedTs = job.completed_at ? new Date(job.completed_at).toLocaleString() : null;
-
-    const statusConfig = {
-      done:       { cls: "job-status-done",       icon: "✅", label: "Done" },
-      failed:     { cls: "job-status-failed",      icon: "❌", label: "Failed" },
-      processing: { cls: "job-status-processing",  icon: "⚙️", label: "Processing…" },
-      pending:    { cls: "job-status-pending",      icon: "⏳", label: "Pending…" },
-    };
-    const sc = statusConfig[job.status] || { cls: "", icon: "❓", label: job.status };
-
-    row.innerHTML = `
-      <div class="job-info">
-        <div class="job-header-row">
-          <span class="job-status-badge ${sc.cls}">${sc.icon} ${sc.label}</span>
-          <strong class="job-template-name">${escapeHtml(job.template_name || "Report")}</strong>
-          <span class="job-format-badge">${escapeHtml(job.export_format?.toUpperCase() || "—")}</span>
-        </div>
-        <div class="job-meta">
-          <span>ID: <code>${job.id.slice(0, 12)}…</code></span>
-          <span>Started: ${ts}</span>
-          ${completedTs ? `<span>Finished: ${completedTs}</span>` : ""}
-        </div>
-        ${job.error_message ? `<div class="job-error-msg">⚠ ${escapeHtml(job.error_message)}</div>` : ""}
-      </div>
-      <div class="job-actions">
-        ${job.status === "done" ? `<button class="primary-button job-download-btn" data-id="${job.id}" data-fmt="${job.export_format}" type="button">⬇ Download</button>` : ""}
-        ${(job.status === "processing" || job.status === "pending") ? `<button class="secondary-button job-poll-btn" data-id="${job.id}" type="button">↻ Check</button>` : ""}
-      </div>
-    `;
-
-    row.querySelector(".job-download-btn")?.addEventListener("click", () => {
-      downloadReportFile(job.id, job.export_format);
-    });
-    row.querySelector(".job-poll-btn")?.addEventListener("click", () => {
-      pollSingleJob(job.id);
-    });
-
-    el.appendChild(row);
-  }
-}
-
-async function pollSingleJob(jobId) {
-  try {
-    const job = await apiFetch(`${API_REPORTS}/${jobId}`);
-    // Update this job in local state and re-render
-    const idx = tier2State.reportJobs.findIndex(j => j.id === jobId);
-    if (idx !== -1) tier2State.reportJobs[idx] = job;
-    else tier2State.reportJobs.unshift(job);
-    renderJobsList(tier2State.reportJobs);
-  } catch (err) {
-    toast(`Could not check job: ${err.message}`, "error");
-  }
-}
-
-function downloadReportFile(jobId, format) {
-  // Read token from the correct key
-  let token = "";
-  try { token = JSON.parse(localStorage.getItem("knowforge.auth.v1") || "{}").token || ""; } catch { }
-  const url = `${API_REPORTS}/${jobId}/download`;
-  fetch(url, { headers: { Authorization: `Bearer ${token}` } })
-    .then(res => {
-      if (!res.ok) return res.json().then(d => { throw new Error(d.detail?.message || "Download failed"); });
-      return res.blob();
-    })
-    .then(blob => {
-      const ext = format || "bin";
-      const a = document.createElement("a");
-      a.href = URL.createObjectURL(blob);
-      a.download = `report_${jobId.slice(0, 8)}.${ext}`;
-      document.body.appendChild(a);
-      a.click();
-      setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 2000);
-      toast("Report downloaded!");
-    })
-    .catch(err => toast(err.message, "error"));
-}
 
 
 // =============================================================================
@@ -2845,3 +2342,721 @@ if (_origRenderChat) {
 // Initialize Tier 2
 bindTier2Events();
 loadWorkspaces();
+
+// =============================================================================
+// RESEARCH INTELLIGENCE ENGINE (Tier 3)
+// =============================================================================
+(function initResearchIntelligence() {
+  const researchState = {
+    papers: [],
+    selectedPaperIds: new Set(),
+    activeSubtab: "details",
+    activePaperId: null
+  };
+
+  // Add research API endpoints
+  API.researchPapers = "/api/v1/research/papers";
+  API.researchGraph = "/api/v1/research/graph";
+  API.researchCompare = "/api/v1/research/compare";
+  API.researchGaps = "/api/v1/research/gaps";
+
+  // Elements mapping
+  const elements = {
+    researchList: document.querySelector("#researchList"),
+    emptyResearch: document.querySelector("#emptyResearch"),
+    refreshResearchBtn: document.querySelector("#refreshResearchBtn"),
+    researchGraphBtn: document.querySelector("#researchGraphBtn"),
+    researchCompareBtn: document.querySelector("#researchCompareBtn"),
+    researchGapsBtn: document.querySelector("#researchGapsBtn"),
+    researchModal: document.querySelector("#researchModal"),
+    researchModalCloseBtn: document.querySelector("#researchModalCloseBtn"),
+    paperDetailsContent: document.querySelector("#paperDetailsContent"),
+    compareQueryInput: document.querySelector("#compareQueryInput"),
+    runCompareBtn: document.querySelector("#runCompareBtn"),
+    compareMatrixResult: document.querySelector("#compareMatrixResult"),
+    runGapsBtn: document.querySelector("#runGapsBtn"),
+    gapsResult: document.querySelector("#gapsResult"),
+    subtabs: document.querySelectorAll(".research-sub-tab"),
+    researchUploadArea: document.querySelector("#researchUploadArea"),
+    researchPdfInput: document.querySelector("#researchPdfInput"),
+    researchUploadState: document.querySelector("#researchUploadState"),
+    panels: {
+      details: document.querySelector("#researchDetailsPanel"),
+      graph: document.querySelector("#researchGraphPanel"),
+      compare: document.querySelector("#researchComparePanel"),
+      gaps: document.querySelector("#researchGapsPanel")
+    }
+  };
+
+  // Export to global scope so index.html's tab switcher can refresh research list
+  window.refreshResearchPapers = loadResearchPapers;
+
+  let pollInterval = null;
+
+  async function loadResearchPapers() {
+    if (!state.token) {
+      stopPolling();
+      return;
+    }
+    if (!elements.researchList) return;
+    
+    // If we're already rendering items, do not show "Loading..." to avoid jarring flashes during background poll
+    const isFirstLoad = elements.researchList.innerHTML === "" || 
+                        elements.researchList.querySelector(".empty-mini") !== null ||
+                        elements.researchList.querySelector(".inline-error") !== null;
+                        
+    if (isFirstLoad) {
+      elements.researchList.innerHTML = `<p class="empty-mini">Loading papers…</p>`;
+    }
+    
+    try {
+      const response = await apiFetch(API.researchPapers);
+      researchState.papers = response || [];
+      renderResearchPapers();
+
+      // Poll background status every 5s if there is any active pending/processing papers
+      const hasProcessing = researchState.papers.some(p => p.status === "pending" || p.status === "processing");
+      if (hasProcessing) {
+        startPolling();
+      } else {
+        stopPolling();
+      }
+    } catch (e) {
+      if (isFirstLoad) {
+        elements.researchList.innerHTML = `<p class="inline-error">${escapeHtml(e.message)}</p>`;
+      }
+    }
+  }
+
+  function startPolling() {
+    if (pollInterval) return;
+    pollInterval = setInterval(() => {
+      loadResearchPapers();
+    }, 5000);
+  }
+
+  function stopPolling() {
+    if (pollInterval) {
+      clearInterval(pollInterval);
+      pollInterval = null;
+    }
+  }
+
+  function renderResearchPapers() {
+    if (!elements.researchList) return;
+    elements.researchList.innerHTML = "";
+    const hasPapers = researchState.papers.length > 0;
+    elements.emptyResearch.hidden = hasPapers;
+    if (!hasPapers) return;
+
+    researchState.papers.forEach((paper) => {
+      const item = document.createElement("div");
+      const isSelected = researchState.selectedPaperIds.has(paper.id);
+      const isActive = researchState.activePaperId === paper.id;
+      item.className = `paper-item ${isActive ? "active" : ""}`;
+      
+      const authorsList = paper.authors && paper.authors.length 
+        ? paper.authors.slice(0, 2).join(", ") + (paper.authors.length > 2 ? " et al." : "")
+        : "Unknown Authors";
+      
+      const statusPill = paper.status === "failed" 
+        ? `<span class="wiki-badge warn" title="${escapeHtml(paper.error_message || '')}">Failed</span>`
+        : (paper.status === "completed" || paper.status === "done")
+        ? `<span class="wiki-badge" style="background:#2ecc71; color:white; border-color:#27ae60;">Analyzed</span>`
+        : `<span class="wiki-badge muted">Processing</span>`;
+
+      item.innerHTML = `
+        <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 8px;">
+          <strong class="paper-title" style="flex: 1; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; line-height: 1.3;">${escapeHtml(paper.title)}</strong>
+          <div style="display: flex; align-items: center; gap: 8px; flex-shrink: 0; margin-top: 2px;">
+            <input type="checkbox" class="paper-select-checkbox" data-id="${paper.id}" ${isSelected ? "checked" : ""} style="cursor: pointer; margin: 0;" />
+            <button class="paper-delete-btn" data-id="${paper.id}" title="Delete paper" style="background: none; border: none; padding: 2px; cursor: pointer; color: var(--muted); font-size: 12px; font-weight: bold; line-height: 1; transition: color 0.2s; display: flex; align-items: center; justify-content: center; height: 16px; width: 16px;">✕</button>
+          </div>
+        </div>
+        <div style="font-size: 11px; color: var(--muted); margin-bottom: 6px; margin-top: 4px;">${escapeHtml(authorsList)}</div>
+        <div class="paper-meta">
+          <span>${escapeHtml(paper.venue || "No Venue")}</span>
+          <span>•</span>
+          <span>${escapeHtml(paper.publication_year ? String(paper.publication_year) : "N/A")}</span>
+          <span>•</span>
+          ${statusPill}
+        </div>
+      `;
+
+      // Select checkbox behavior
+      const checkbox = item.querySelector(".paper-select-checkbox");
+      checkbox.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (checkbox.checked) {
+          researchState.selectedPaperIds.add(paper.id);
+        } else {
+          researchState.selectedPaperIds.delete(paper.id);
+        }
+      });
+
+      // Delete button behavior
+      const deleteBtn = item.querySelector(".paper-delete-btn");
+      deleteBtn.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        if (!confirm(`Are you sure you want to delete "${paper.title}"?`)) {
+          return;
+        }
+        try {
+          await apiFetch(`${API.researchPapers}/${paper.id}`, { method: "DELETE" });
+          toast(`Deleted paper: ${paper.title}`);
+          researchState.selectedPaperIds.delete(paper.id);
+          if (researchState.activePaperId === paper.id) {
+            researchState.activePaperId = null;
+            elements.paperDetailsContent.innerHTML = `<p class="empty-mini">Select a research paper from the sidebar list to analyze details.</p>`;
+          }
+          await loadResearchPapers();
+        } catch (err) {
+          toast(`Failed to delete: ${err.message}`, "error");
+        }
+      });
+
+      // View paper details
+      item.addEventListener("click", () => {
+        researchState.activePaperId = paper.id;
+        renderResearchPapers();
+        openResearchModal("details");
+        loadPaperDetails(paper.id);
+      });
+
+      elements.researchList.appendChild(item);
+    });
+  }
+
+  async function loadPaperDetails(paperId) {
+    elements.paperDetailsContent.innerHTML = `<p class="empty-mini">Loading paper details…</p>`;
+    try {
+      const details = await apiFetch(`${API.researchPapers}/${paperId}`);
+      if (details.error) {
+        elements.paperDetailsContent.innerHTML = `<p class="inline-error">${escapeHtml(details.error)}</p>`;
+        return;
+      }
+      renderPaperDetails(details);
+    } catch (e) {
+      elements.paperDetailsContent.innerHTML = `<p class="inline-error">${escapeHtml(e.message)}</p>`;
+    }
+  }
+
+  function renderPaperDetails(paper) {
+    const authors = paper.authors && paper.authors.length ? paper.authors.join(", ") : "Unknown Authors";
+    const abstract = paper.abstract || "No abstract extracted.";
+    
+    // Render Sections
+    const sectionsHtml = paper.sections && paper.sections.length
+      ? paper.sections.map(s => `
+          <div class="research-section-box" style="margin-bottom: 16px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); overflow: hidden;">
+            <h5 style="font-size: 12.5px; font-weight: 700; color: var(--ink); margin: 0; padding: 10px 14px; background: var(--bg-hover); border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center;">
+              <span>${escapeHtml(s.heading)}</span>
+              <span style="font-size: 9px; font-weight: 600; color: var(--muted); text-transform: uppercase; background: var(--line); padding: 2px 6px; border-radius: 4px; letter-spacing: 0.5px;">${escapeHtml(s.section_type)}</span>
+            </h5>
+            <div style="font-size: 13px; color: var(--text); line-height: 1.6; padding: 14px; white-space: pre-line; max-height: 400px; overflow-y: auto; font-family: var(--font-serif); text-align: justify; background: #faf9f6;">
+              ${escapeHtml(s.content)}
+            </div>
+          </div>
+        `).join("")
+      : `<p class="muted-text" style="font-size: 12px;">No structural sections parsed.</p>`;
+
+    // Render Methods
+    const methodsHtml = paper.methods && paper.methods.length
+      ? `<table class="research-table">
+          <thead>
+            <tr>
+              <th>Method/Model</th>
+              <th>Description</th>
+              <th>Evaluation Dataset</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${paper.methods.map(m => `
+              <tr>
+                <td><strong>${escapeHtml(m.name)}</strong></td>
+                <td>${escapeHtml(m.description || 'N/A')}</td>
+                <td><span class="wiki-badge">${escapeHtml(m.dataset_used || 'N/A')}</span></td>
+              </tr>
+            `).join("")}
+          </tbody>
+        </table>`
+      : `<p class="muted-text" style="font-size: 12px; margin-top: 4px;">No custom methodology entities extracted.</p>`;
+
+    // Render Claims & Limitations
+    const claimsHtml = paper.claims && paper.claims.length
+      ? paper.claims.map(c => {
+          const categoryClass = c.category || "finding";
+          const levelClass = c.grounding_level || "fully_supported";
+          return `
+            <div class="research-claim-card ${categoryClass}">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                <span class="research-claim-tag ${categoryClass}">${escapeHtml(c.category)}</span>
+                <span class="wiki-badge ${levelClass === 'fully_supported' ? '' : 'warn'}" style="font-size: 8px;">${escapeHtml(c.grounding_level)}</span>
+              </div>
+              <p style="font-size: 12px; font-weight: 500; margin: 0 0 6px 0;">"${escapeHtml(c.claim_text)}"</p>
+              ${c.evidence ? `<p style="font-size: 11px; color: var(--muted); margin: 0; font-style: italic;">Evidence: "${escapeHtml(c.evidence)}"</p>` : ""}
+            </div>
+          `;
+        }).join("")
+      : `<p class="muted-text" style="font-size: 12px;">No claims or gaps extracted from content.</p>`;
+
+    elements.paperDetailsContent.innerHTML = `
+      <div style="margin-bottom: 16px; border-bottom: 1px solid var(--line); padding-bottom: 12px;">
+        <h3 style="font-family: var(--font-serif); font-size: 20px; font-weight: 700; color: var(--ink); margin-bottom: 6px;">${escapeHtml(paper.title)}</h3>
+        <p style="font-size: 12px; color: var(--muted); margin: 0 0 4px 0;"><strong>Authors:</strong> ${escapeHtml(authors)}</p>
+        <div style="display: flex; gap: 8px; font-size: 11px; color: var(--muted);">
+          <span><strong>Venue:</strong> ${escapeHtml(paper.venue || "N/A")}</span>
+          <span>•</span>
+          <span><strong>Year:</strong> ${escapeHtml(paper.publication_year ? String(paper.publication_year) : "N/A")}</span>
+          <span>•</span>
+          <span><strong>DOI:</strong> ${escapeHtml(paper.doi || "N/A")}</span>
+        </div>
+      </div>
+
+      <div style="display: grid; grid-template-columns: 1fr; gap: 20px;">
+        <div>
+          <h4 style="font-size: 14px; font-weight: 600; margin-bottom: 8px; color: var(--ink);">Abstract</h4>
+          <p style="font-size: 12.5px; line-height: 1.5; color: var(--text); background: var(--bg-hover); padding: 12px; border-radius: 4px; border-left: 3px solid var(--accent); margin: 0;">${escapeHtml(abstract)}</p>
+        </div>
+
+        <div>
+          <h4 style="font-size: 14px; font-weight: 600; margin-bottom: 8px; color: var(--ink);">Proposed Methodology & Models</h4>
+          ${methodsHtml}
+        </div>
+
+        <div>
+          <h4 style="font-size: 14px; font-weight: 600; margin-bottom: 8px; color: var(--ink);">Parsed Claims & Findings</h4>
+          ${claimsHtml}
+        </div>
+
+        <div>
+          <h4 style="font-size: 14px; font-weight: 600; margin-bottom: 8px; color: var(--ink);">Document Sections</h4>
+          ${sectionsHtml}
+        </div>
+      </div>
+    `;
+  }
+
+  function openResearchModal(subtab = "details") {
+    if (!elements.researchModal) return;
+    elements.researchModal.hidden = false;
+    switchSubtab(subtab);
+  }
+
+  function closeResearchModal() {
+    if (!elements.researchModal) return;
+    elements.researchModal.hidden = true;
+  }
+
+  function switchSubtab(subtabId) {
+    researchState.activeSubtab = subtabId;
+    elements.subtabs.forEach((tab) => {
+      const active = tab.getAttribute("data-subtab") === subtabId;
+      tab.classList.toggle("active", active);
+    });
+
+    Object.keys(elements.panels).forEach((panelId) => {
+      if (elements.panels[panelId]) {
+        elements.panels[panelId].style.display = panelId === subtabId ? "flex" : "none";
+      }
+    });
+
+    if (subtabId === "graph") {
+      renderCitationGraph();
+    }
+  }
+
+  async function renderCitationGraph() {
+    const canvas = document.querySelector("#researchGraphCanvas");
+    if (!canvas) return;
+    canvas.innerHTML = `<p class="empty-mini">Loading citation connections…</p>`;
+    try {
+      const data = await apiFetch(API.researchGraph);
+      if (!data.nodes || !data.nodes.length) {
+        canvas.innerHTML = `<p class="empty-mini">No connections found. Upload related papers referencing similar concepts.</p>`;
+        return;
+      }
+
+      // Render nodes & lines in SVG cleanly
+      let svgHtml = `<svg width="100%" height="300" style="background: var(--bg-hover); border-radius: 6px;">`;
+      
+      // Node position mappings (calculate dynamic layout simple circle coords)
+      const centerX = 350;
+      const centerY = 150;
+      const radius = 90;
+      const nodesCount = data.nodes.length;
+      
+      const nodeCoords = {};
+      data.nodes.forEach((node, idx) => {
+        const angle = (2 * Math.PI * idx) / nodesCount;
+        const x = centerX + radius * Math.cos(angle);
+        const y = centerY + radius * Math.sin(angle);
+        nodeCoords[node.id] = { x, y, label: node.label, year: node.year };
+      });
+
+      // Draw Edges / Links
+      data.links.forEach((link) => {
+        const src = nodeCoords[link.source];
+        const tgt = nodeCoords[link.target];
+        if (src && tgt) {
+          const isContradict = link.relation_type === "contradicts";
+          const color = isContradict ? "var(--danger)" : "var(--accent)";
+          svgHtml += `
+            <line x1="${src.x}" y1="${src.y}" x2="${tgt.x}" y2="${tgt.y}" 
+                  stroke="${color}" stroke-width="2" stroke-dasharray="${isContradict ? '4' : '0'}" />
+          `;
+        }
+      });
+
+      // Draw Nodes
+      Object.keys(nodeCoords).forEach((id) => {
+        const node = nodeCoords[id];
+        svgHtml += `
+          <g class="graph-node-group" style="cursor: pointer;" onclick="window.selectPaperFromGraph('${id}')">
+            <circle cx="${node.x}" cy="${node.y}" r="8" fill="var(--accent)" stroke="var(--surface)" stroke-width="2" />
+            <text x="${node.x + 12}" y="${node.y + 4}" font-size="10" font-weight="600" fill="var(--ink)" font-family="sans-serif">${escapeHtml(node.label.slice(0, 15))}...</text>
+          </g>
+        `;
+      });
+
+      svgHtml += `</svg>`;
+      canvas.innerHTML = svgHtml;
+
+      // Register select paper callback globally
+      window.selectPaperFromGraph = (paperId) => {
+        researchState.activePaperId = paperId;
+        renderResearchPapers();
+        switchSubtab("details");
+        loadPaperDetails(paperId);
+      };
+
+    } catch (e) {
+      canvas.innerHTML = `<p class="inline-error">${escapeHtml(e.message)}</p>`;
+    }
+  }
+
+  function tableToMarkdown(headers, rows) {
+    let md = `| ${headers.join(" | ")} |\n`;
+    md += `| ${headers.map(() => "---").join(" | ")} |\n`;
+    rows.forEach(row => {
+      // Escape pipe characters to preserve Markdown formatting
+      const cleanRow = row.map(cell => String(cell).replace(/\|/g, "\\|"));
+      md += `| ${cleanRow.join(" | ")} |\n`;
+    });
+    return md;
+  }
+
+  function gapsToMarkdown(gaps) {
+    let md = `# Literature Gaps and Workspace Analysis\n\n`;
+    
+    if (gaps.contradictions && gaps.contradictions.length) {
+      md += `## Cross-Paper Contradictions\n\n`;
+      gaps.contradictions.forEach(c => {
+        md += `* **Paper A**: ${c.paper_a}\n  *Claim*: "${c.claim_a}"\n`;
+        md += `* **Paper B**: ${c.paper_b}\n  *Claim*: "${c.claim_b}"\n`;
+        md += `* **Explanation**: ${c.explanation}\n\n`;
+      });
+    }
+    
+    if (gaps.untested_combinations && gaps.untested_combinations.length) {
+      md += `## Untested Methodology Combinations\n\n`;
+      gaps.untested_combinations.forEach(combo => {
+        md += `* **Methodology**: ${combo.method} (from ${combo.paper})\n`;
+        md += `* **Dataset**: ${combo.dataset} (from ${combo.dataset_paper})\n`;
+        md += `* **Value/Benefit**: ${combo.potential_benefit}\n\n`;
+      });
+    }
+    
+    if (gaps.open_challenges && gaps.open_challenges.length) {
+      md += `## Unresolved Literature Challenges\n\n`;
+      gaps.open_challenges.forEach(challenge => {
+        md += `* **Challenge**: ${challenge.challenge}\n  *Implication*: ${challenge.implication}\n\n`;
+      });
+    }
+    
+    return md;
+  }
+
+  function downloadTextFile(filename, text) {
+    const element = document.createElement("a");
+    element.setAttribute("href", "data:text/markdown;charset=utf-8," + encodeURIComponent(text));
+    element.setAttribute("download", filename);
+    element.style.display = "none";
+    document.body.appendChild(element);
+    element.click();
+    document.body.removeChild(element);
+  }
+
+  async function generateComparisonMatrix() {
+    if (researchState.selectedPaperIds.size === 0) {
+      elements.compareMatrixResult.innerHTML = `<p class="inline-error" style="padding: 16px;">Please select at least one paper in the sidebar using checkboxes.</p>`;
+      return;
+    }
+
+    elements.compareMatrixResult.innerHTML = `<p class="empty-mini" style="padding: 16px;">Synthesizing comparison matrix…</p>`;
+    try {
+      const payload = {
+        paper_ids: Array.from(researchState.selectedPaperIds),
+        query: elements.compareQueryInput.value || null
+      };
+      const result = await apiFetch(API.researchCompare, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+
+      if (!result.headers || !result.rows) {
+        elements.compareMatrixResult.innerHTML = `<p class="inline-error" style="padding: 16px;">Failed to parse comparison format from agent response.</p>`;
+        return;
+      }
+
+      researchState.lastComparison = result;
+
+      // Render table and export bar
+      let tableHtml = `
+        <div style="padding: 10px; display: flex; gap: 8px; justify-content: flex-end; border-bottom: 1px solid var(--line); background: var(--bg-hover);">
+          <button id="copyMatrixBtn" class="secondary-button" style="padding: 4px 10px; font-size: 11px; height: auto;" type="button">📋 Copy Markdown</button>
+          <button id="downloadMatrixBtn" class="secondary-button" style="padding: 4px 10px; font-size: 11px; height: auto;" type="button">📥 Download MD</button>
+        </div>
+        <table class="research-table" style="margin-top: 0; width: 100%; border: none;">
+          <thead>
+            <tr>
+              ${result.headers.map(h => `<th>${escapeHtml(h)}</th>`).join("")}
+            </tr>
+          </thead>
+          <tbody>
+            ${result.rows.map(row => `
+              <tr>
+                ${row.map((cell, idx) => `
+                  <td>${idx === 0 ? `<strong>${escapeHtml(cell)}</strong>` : escapeHtml(cell)}</td>
+                `).join("")}
+              </tr>
+            `).join("")}
+          </tbody>
+        </table>
+      `;
+      elements.compareMatrixResult.innerHTML = tableHtml;
+
+      // Wire export buttons
+      document.getElementById("copyMatrixBtn").addEventListener("click", () => {
+        const md = tableToMarkdown(researchState.lastComparison.headers, researchState.lastComparison.rows);
+        navigator.clipboard.writeText(md);
+        toast("Comparison matrix copied to clipboard as Markdown!");
+      });
+
+      document.getElementById("downloadMatrixBtn").addEventListener("click", () => {
+        const md = tableToMarkdown(researchState.lastComparison.headers, researchState.lastComparison.rows);
+        downloadTextFile("comparison_matrix.md", md);
+      });
+
+    } catch (e) {
+      elements.compareMatrixResult.innerHTML = `<p class="inline-error" style="padding: 16px;">${escapeHtml(e.message)}</p>`;
+    }
+  }
+
+  async function generateLiteratureGaps() {
+    if (researchState.selectedPaperIds.size === 0) {
+      elements.gapsResult.innerHTML = `<p class="inline-error" style="padding: 16px;">Please select at least one paper in the sidebar using checkboxes.</p>`;
+      return;
+    }
+
+    elements.gapsResult.innerHTML = `<p class="empty-mini">Searching for contradictions and methodology gaps…</p>`;
+    try {
+      const payload = {
+        paper_ids: Array.from(researchState.selectedPaperIds)
+      };
+      const result = await apiFetch(API.researchGaps, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+
+      researchState.lastGaps = result;
+
+      // Render Gaps UI with export actions at the top
+      let html = `
+        <div style="margin: -16px -16px 16px -16px; padding: 10px 16px; display: flex; gap: 8px; justify-content: flex-end; border-bottom: 1px solid var(--line); background: var(--bg-hover);">
+          <button id="copyGapsBtn" class="secondary-button" style="padding: 4px 10px; font-size: 11px; height: auto;" type="button">📋 Copy Report</button>
+          <button id="downloadGapsBtn" class="secondary-button" style="padding: 4px 10px; font-size: 11px; height: auto;" type="button">📥 Download Report</button>
+        </div>
+      `;
+
+      let hasContent = false;
+
+      // Contradictions
+      if (result.contradictions && result.contradictions.length) {
+        hasContent = true;
+        html += `<h4 style="margin: 0 0 8px 0; font-size: 13px; font-weight: 700; color: var(--danger);">Cross-Paper Contradictions</h4>`;
+        result.contradictions.forEach(c => {
+          html += `
+            <div class="research-claim-card limitation">
+              <p style="font-size: 12px; margin: 0 0 6px 0;"><strong>${escapeHtml(c.paper_a)}</strong> claims: <em>"${escapeHtml(c.claim_a)}"</em></p>
+              <p style="font-size: 12px; margin: 0 0 6px 0;"><strong>${escapeHtml(c.paper_b)}</strong> claims: <em>"${escapeHtml(c.claim_b)}"</em></p>
+              <p style="font-size: 11px; color: var(--muted); margin: 0; padding-top: 4px; border-top: 1px dashed var(--line);"><strong>Explanation:</strong> ${escapeHtml(c.explanation)}</p>
+            </div>
+          `;
+        });
+      }
+
+      // Untested Combinations
+      if (result.untested_combinations && result.untested_combinations.length) {
+        hasContent = true;
+        html += `<h4 style="margin: 16px 0 8px 0; font-size: 13px; font-weight: 700; color: var(--accent);">Untested Methodology Combinations</h4>`;
+        result.untested_combinations.forEach(combo => {
+          html += `
+            <div class="research-claim-card hypothesis">
+              <p style="font-size: 12px; margin: 0 0 4px 0;">Apply methodology <strong>${escapeHtml(combo.method)}</strong> (from <em>${escapeHtml(combo.paper)}</em>) to evaluation dataset <strong>${escapeHtml(combo.dataset)}</strong> (from <em>${escapeHtml(combo.dataset_paper)}</em>).</p>
+              <p style="font-size: 11px; color: var(--muted); margin: 0;"><strong>Potential Value:</strong> ${escapeHtml(combo.potential_benefit)}</p>
+            </div>
+          `;
+        });
+      }
+
+      // Open Challenges
+      if (result.open_challenges && result.open_challenges.length) {
+        hasContent = true;
+        html += `<h4 style="margin: 16px 0 8px 0; font-size: 13px; font-weight: 700; color: #f39c12;">Unresolved Literature Challenges</h4>`;
+        result.open_challenges.forEach(challenge => {
+          html += `
+            <div class="research-claim-card gap">
+              <p style="font-size: 12px; font-weight: 600; margin: 0 0 4px 0;">${escapeHtml(challenge.challenge)}</p>
+              <p style="font-size: 11px; color: var(--muted); margin: 0;"><strong>Implication:</strong> ${escapeHtml(challenge.implication)}</p>
+            </div>
+          `;
+        });
+      }
+
+      if (!hasContent) {
+        html = `<p class="empty-mini">Workspace comparison finished. No notable conflicts or gaps found across selections.</p>`;
+      }
+
+      elements.gapsResult.innerHTML = html;
+
+      // Wire export buttons if we have content
+      if (hasContent) {
+        document.getElementById("copyGapsBtn").addEventListener("click", () => {
+          const md = gapsToMarkdown(researchState.lastGaps);
+          navigator.clipboard.writeText(md);
+          toast("Literature gaps report copied to clipboard as Markdown!");
+        });
+
+        document.getElementById("downloadGapsBtn").addEventListener("click", () => {
+          const md = gapsToMarkdown(researchState.lastGaps);
+          downloadTextFile("literature_gaps_report.md", md);
+        });
+      } else {
+        const btnRow = elements.gapsResult.querySelector("div");
+        if (btnRow) btnRow.style.display = "none";
+      }
+
+    } catch (e) {
+      elements.gapsResult.innerHTML = `<p class="inline-error">${escapeHtml(e.message)}</p>`;
+    }
+  }
+
+  // Wire event handlers
+  if (elements.refreshResearchBtn) elements.refreshResearchBtn.addEventListener("click", loadResearchPapers);
+  if (elements.researchModalCloseBtn) elements.researchModalCloseBtn.addEventListener("click", closeResearchModal);
+
+  if (elements.researchGraphBtn) {
+    elements.researchGraphBtn.addEventListener("click", () => {
+      openResearchModal("graph");
+    });
+  }
+
+  if (elements.researchCompareBtn) {
+    elements.researchCompareBtn.addEventListener("click", () => {
+      openResearchModal("compare");
+    });
+  }
+
+  if (elements.researchGapsBtn) {
+    elements.researchGapsBtn.addEventListener("click", () => {
+      openResearchModal("gaps");
+    });
+  }
+
+  if (elements.runCompareBtn) elements.runCompareBtn.addEventListener("click", generateComparisonMatrix);
+  if (elements.runGapsBtn) elements.runGapsBtn.addEventListener("click", generateLiteratureGaps);
+
+  elements.subtabs.forEach((tab) => {
+    tab.addEventListener("click", () => {
+      const subtabId = tab.getAttribute("data-subtab");
+      switchSubtab(subtabId);
+    });
+  });
+
+  // Handle click on drag & drop / upload zone
+  if (elements.researchUploadArea && elements.researchPdfInput) {
+    elements.researchUploadArea.addEventListener("click", () => {
+      elements.researchPdfInput.click();
+    });
+
+    elements.researchPdfInput.addEventListener("change", async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      
+      if (file.type !== "application/pdf" && !file.name.toLowerCase().endsWith(".pdf")) {
+        showResearchUploadError("Please choose a PDF file.");
+        return;
+      }
+
+      const defaultDiv = document.getElementById("researchUploadDefault");
+      const activeDiv = document.getElementById("researchUploadActive");
+      const messageSpan = document.getElementById("researchUploadMessage");
+      
+      if (defaultDiv && activeDiv && messageSpan) {
+        defaultDiv.style.display = "none";
+        activeDiv.style.display = "flex";
+        messageSpan.textContent = "Uploading document...";
+        elements.researchUploadArea.style.borderColor = "var(--accent)";
+      }
+      
+      const form = new FormData();
+      form.append("file", file);
+      
+      try {
+        const url = `${API.upload}?force_research=true`;
+        const response = await apiFetch(url, { method: "POST", body: form, timeout: 120000 });
+        toast(`Uploaded ${response.filename}. Initiated extraction.`);
+        
+        if (messageSpan) {
+          messageSpan.textContent = "Initiated analysis...";
+        }
+
+        // Reload standard wiki pages list & research list
+        if (window.loadWikiPages) await window.loadWikiPages();
+        await loadResearchPapers();
+
+        setTimeout(() => {
+          if (defaultDiv && activeDiv) {
+            defaultDiv.style.display = "block";
+            activeDiv.style.display = "none";
+            elements.researchUploadArea.style.borderColor = "var(--line)";
+          }
+        }, 2000);
+
+      } catch (error) {
+        showResearchUploadError(error.message);
+      }
+    });
+  }
+
+  function showResearchUploadError(msg) {
+    toast(msg, "error");
+    const defaultDiv = document.getElementById("researchUploadDefault");
+    const activeDiv = document.getElementById("researchUploadActive");
+    const messageSpan = document.getElementById("researchUploadMessage");
+    
+    if (messageSpan && activeDiv && defaultDiv) {
+      messageSpan.textContent = `Error: ${msg}`;
+      elements.researchUploadArea.style.borderColor = "var(--danger)";
+      setTimeout(() => {
+        defaultDiv.style.display = "block";
+        activeDiv.style.display = "none";
+        elements.researchUploadArea.style.borderColor = "var(--line)";
+      }, 5000);
+    }
+  }
+
+})();

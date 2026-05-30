@@ -93,9 +93,9 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path></svg>
             <span>Wiki</span>
           </button>
-          <button class="sidebar-tab-btn" data-tab="conflicts" role="tab" aria-selected="false" type="button" title="Contradictions">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
-            <span>Conflicts</span>
+          <button class="sidebar-tab-btn" data-tab="research" role="tab" aria-selected="false" type="button" title="Research Intelligence">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"></path><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"></path></svg>
+            <span>Research</span>
           </button>
         </div>
 
@@ -152,19 +152,52 @@
               <div id="wikiList" class="wiki-list"></div>
               <div id="emptyWiki" class="empty-mini">Upload a PDF or create a page to start.</div>
             </div>
+
+            <!-- Factual Conflicts Integrated inside Wiki Panel -->
+            <div class="wiki-conflicts-section" style="border-top: 1px solid var(--line); margin-top: 16px; padding-top: 16px;">
+              <div class="panel-heading">
+                <h2>Factual Conflicts</h2>
+                <button id="scanConflictsBtn" class="primary-button" type="button" title="Scan wiki for contradictions" style="font-size: 11px; padding: 4px 10px; height: auto;">
+                  <span>⚡ Scan</span>
+                </button>
+              </div>
+              <p class="panel-hint" style="margin-bottom: 8px;">Cross-page factual mismatches detected by KnowForge.</p>
+              <div id="conflictsList" class="conflicts-list"></div>
+              <div id="emptyConflicts" class="empty-mini">No open conflicts. Scan after uploading related documents.</div>
+            </div>
           </section>
 
-          <!-- Panel 3: Conflicts (Hidden by Default) -->
-          <section class="panel conflicts-panel" style="display: none;">
+          <!-- Panel 4: Research (Hidden by Default) -->
+          <section class="panel research-panel" style="display: none;">
             <div class="panel-heading">
-              <h2>Conflicts</h2>
-              <button id="scanConflictsBtn" class="icon-button" type="button" title="Scan wiki for contradictions">
-                <span>⚡ Scan</span>
+              <h2>Research</h2>
+              <button id="refreshResearchBtn" class="icon-button" type="button" title="Refresh research papers">
+                <span>↻</span>
               </button>
             </div>
-            <p class="panel-hint">Cross-page factual mismatches detected by KnowForge.</p>
-            <div id="conflictsList" class="conflicts-list"></div>
-            <div id="emptyConflicts" class="empty-mini">No open conflicts. Scan after uploading related documents.</div>
+            <p class="panel-hint">Academic intelligence & citation mapping.</p>
+            
+            <!-- Dedicated Research Paper Uploader -->
+            <div id="researchUploadArea" style="margin: 8px 12px; padding: 16px 12px; border: 2px dashed var(--line); border-radius: 6px; text-align: center; background: var(--bg-hover); cursor: pointer; transition: all 0.2s ease;">
+              <div id="researchUploadDefault">
+                <span style="font-size: 12px; color: var(--muted); font-weight: 600; display: block; margin-bottom: 4px;">📂 Upload Research PDF</span>
+                <span style="font-size: 10px; color: var(--muted); display: block;">Forces extraction pipeline</span>
+              </div>
+              <div id="researchUploadActive" style="display: none; flex-direction: column; align-items: center; justify-content: center; gap: 8px;">
+                <div class="thinking-spinner" style="width: 16px; height: 16px; margin: 0 auto;"></div>
+                <span id="researchUploadMessage" style="font-size: 11px; color: var(--muted); font-weight: 500; display: block;">Uploading document...</span>
+              </div>
+              <input type="file" id="researchPdfInput" accept=".pdf" style="display: none;" />
+            </div>
+
+            <div class="research-global-actions">
+              <button id="researchGraphBtn" class="primary-button" type="button">⚡ Graph</button>
+              <button id="researchCompareBtn" class="primary-button" type="button">📊 Compare</button>
+              <button id="researchGapsBtn" class="primary-button" type="button">🔍 Gaps</button>
+            </div>
+
+            <div id="researchList" class="wiki-list"></div>
+            <div id="emptyResearch" class="empty-mini">No research papers ingested yet. Upload academic PDFs in the Wiki tab.</div>
           </section>
         </div>
 
@@ -181,9 +214,6 @@
             <button id="llmSettingsBtn" class="footer-action-btn" type="button" title="LLM settings">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
             </button>
-            <button id="reportsBtn" class="footer-action-btn" type="button" title="Report generator">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line></svg>
-            </button>
             <button id="logoutBtn" class="footer-action-btn logout" type="button" title="Logout">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>
             </button>
@@ -196,7 +226,7 @@
       <main class="chat-area">
         <header class="topbar">
           <div class="topbar-left">
-            <h2 id="chatBoardTitle">New Chat</h2>
+            <h2 id="chatBoardTitle"></h2>
           </div>
         </header>
 
@@ -220,7 +250,7 @@
             <button id="sendBtn" class="primary-button" type="submit">Send</button>
           </form>
           <div class="composer-meta">
-            <span>Shift + Enter for new line</span>
+            <span>KnowForge is AI Service Provider and can make mistakes. Please double-check cited sources.</span>
           </div>
         </footer>
       </main>
@@ -257,6 +287,58 @@
           <button id="wikiInsightCloseBtn" class="icon-button" type="button" title="Close">✕</button>
         </div>
         <div id="wikiInsightBody" class="wiki-insight-body"></div>
+      </div>
+    </div>
+
+    <!-- Research intelligence modal -->
+    <div id="researchModal" class="modal-overlay" hidden>
+      <div class="modal-card research-modal-card" role="dialog" aria-modal="true" aria-labelledby="researchModalTitle" style="max-width: 900px; width: 95%; max-height: 90vh; display: flex; flex-direction: column; overflow: hidden;">
+        <div class="modal-header" style="flex-shrink: 0; padding-bottom: 12px; border-bottom: 1px solid var(--line);">
+          <strong id="researchModalTitle">Research Intelligence</strong>
+          <button id="researchModalCloseBtn" class="icon-button" type="button" title="Close">✕</button>
+        </div>
+        
+        <div class="research-sub-tabs" style="display: flex; gap: 4px; padding: 12px 16px 0; border-bottom: 1px solid var(--line); flex-shrink: 0;">
+          <button class="research-sub-tab active" data-subtab="details" type="button">Paper Details</button>
+          <button class="research-sub-tab" data-subtab="graph" type="button">Citation Graph</button>
+          <button class="research-sub-tab" data-subtab="compare" type="button">Comparison Matrix</button>
+          <button class="research-sub-tab" data-subtab="gaps" type="button">Literature Gaps</button>
+        </div>
+
+        <div class="modal-body" style="padding: 16px; flex: 1; overflow-y: auto; display: flex; flex-direction: column; min-height: 0;">
+          <div id="researchDetailsPanel" class="research-sub-panel">
+            <div id="paperDetailsContent" class="empty-mini">Select a research paper from the sidebar list to analyze details.</div>
+          </div>
+
+          <div id="researchGraphPanel" class="research-sub-panel" style="display: none; height: 100%; display: flex; flex-direction: column;">
+            <div id="researchGraphCanvasContainer" style="position: relative; flex: 1; min-height: 350px; background: var(--bg-hover); border-radius: 6px; overflow: hidden; border: 1px solid var(--line);">
+              <div id="researchGraphCanvas" style="width: 100%; height: 100%; display: flex; flex-direction: column; padding: 16px;"></div>
+            </div>
+            <p style="font-size: 11px; color: var(--muted); margin-top: 8px;">Workspace semantic connection graph. Nodes represent uploaded papers, lines show citation/contradiction references.</p>
+          </div>
+
+          <div id="researchComparePanel" class="research-sub-panel" style="display: none; height: 100%; display: flex; flex-direction: column; gap: 12px;">
+            <div style="display: flex; gap: 12px; align-items: flex-end; flex-shrink: 0; flex-wrap: wrap;">
+              <div style="flex: 1; min-width: 250px; display: flex; flex-direction: column; gap: 4px;">
+                <span style="font-size: 11px; font-weight: 600; color: var(--muted);">Custom Synthesis Query (Optional)</span>
+                <input type="text" id="compareQueryInput" placeholder="e.g. Compare model architectures or accuracy metrics" style="width: 100%; padding: 8px 12px; border-radius: 4px; border: 1px solid var(--line); background: var(--bg); color: var(--text); font-size: 13px;" />
+              </div>
+              <button id="runCompareBtn" class="primary-button" style="height: 36px; padding: 0 16px; font-size: 13px;" type="button">⚡ Generate Comparison Matrix</button>
+            </div>
+            <div id="compareMatrixResult" style="flex: 1; overflow-y: auto; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); min-height: 250px;">
+              <p class="empty-mini" style="padding: 32px;">Click "Generate Comparison Matrix" to compile methodology properties.</p>
+            </div>
+          </div>
+
+          <div id="researchGapsPanel" class="research-sub-panel" style="display: none; height: 100%; display: flex; flex-direction: column; gap: 12px;">
+            <div style="display: flex; justify-content: flex-end; flex-shrink: 0;">
+              <button id="runGapsBtn" class="primary-button" type="button">⚡ Analyze Workspace Gaps</button>
+            </div>
+            <div id="gapsResult" style="flex: 1; overflow-y: auto; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); padding: 16px; min-height: 250px;">
+              <p class="empty-mini" style="padding: 32px;">Analyze workspace claims and limitations to detect open opportunities.</p>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -350,87 +432,7 @@
       </div>
     </div>
 
-    <!-- Reports Modal -->
-    <div id="reportsModal" class="modal-overlay" hidden>
-      <div class="modal-card reports-card" role="dialog" aria-modal="true" aria-labelledby="reportsTitle">
-        <div class="modal-header">
-          <strong id="reportsTitle">📊 Report Generator</strong>
-          <button id="reportsCloseBtn" class="icon-button" type="button" title="Close">✕</button>
-        </div>
-        <div class="reports-body">
-          <div class="reports-tabs">
-            <button id="reportTabTemplates" class="auth-tab active" type="button">Templates</button>
-            <button id="reportTabGenerate" class="auth-tab" type="button">Generate</button>
-            <button id="reportTabJobs" class="auth-tab" type="button">Jobs</button>
-          </div>
-          <!-- Templates tab -->
-          <div id="reportPanelTemplates">
-            <div id="reportTemplateList" class="report-template-list"></div>
-            <details class="report-new-template">
-              <summary id="rtSummaryTitle">+ New Template</summary>
-              <div class="report-template-form">
-                <label class="llm-label">Name<input id="rtName" type="text" placeholder="e.g. Vendor Scorecard" /></label>
-                <label class="llm-label">Description<input id="rtDesc" type="text" placeholder="Optional" /></label>
-                <label class="llm-label">Template Type / Format
-                  <select id="rtFormat" style="margin-top: 4px; width: 100%;">
-                    <option value="xlsx">Excel (XLSX) - Tabular</option>
-                    <option value="pdf">PDF - Document</option>
-                    <option value="docx">Word (DOCX) - Document</option>
-                  </select>
-                </label>
-                <label class="llm-label" style="margin-top: 8px;">Target Wiki Pages (Scope) <span class="muted" style="font-size: 0.85em; font-weight: normal; margin-left: 4px;">(The LLM can only see the wiki pages selected here to build the file with the requested template.)</span></label>
-                <div id="rtPageScopeList" class="rt-page-scope-list">
-                  <!-- Checkboxes populated dynamically from state.wikiPages -->
-                </div>
-                
-                <div id="rtColumnsGroup">
-                  <div id="rtColumns" class="rt-columns">
-                    <div class="rt-col-row">
-                      <input class="rt-col-key" type="text" placeholder="key" />
-                      <input class="rt-col-label" type="text" placeholder="Column label" />
-                      <input class="rt-col-instr" type="text" placeholder="Extraction instruction" />
-                      <button class="rt-remove-col text-button" type="button">✕</button>
-                    </div>
-                  </div>
-                  <button id="rtAddCol" class="text-button" type="button">+ Add Column</button>
-                </div>
 
-                <div id="rtTargetInstructionGroup" class="llm-label" style="display: none; flex-direction: column; margin-top: 8px;">
-                  Target Extraction Instruction
-                  <textarea id="rtTargetInstruction" placeholder="e.g. Extract and compile a detailed summary of all procurement findings across the selected documents..." style="margin-top: 4px; min-height: 80px; resize: vertical; width: 100%; box-sizing: border-box; font-family: inherit; font-size: inherit;" class="composer-textarea"></textarea>
-                </div>
-
-                <div style="display: flex; align-items: center; gap: 8px; margin-top: 12px;">
-                  <button id="rtSave" class="primary-button" type="button">Save Template</button>
-                  <button id="rtCancelEdit" class="secondary-button" type="button" hidden>Cancel Edit</button>
-                </div>
-                <div id="rtError" class="inline-error" hidden></div>
-              </div>
-            </details>
-          </div>
-          <!-- Generate tab -->
-          <div id="reportPanelGenerate" hidden>
-            <label class="llm-label">Template
-              <select id="genTemplateSelect"></select>
-            </label>
-            <label class="llm-label">Format
-              <select id="genFormatSelect">
-                <option value="xlsx">Excel (XLSX)</option>
-                <option value="pdf">PDF</option>
-                <option value="docx">Word (DOCX)</option>
-              </select>
-            </label>
-            <button id="genRunBtn" class="primary-button" type="button">Generate Report</button>
-            <div id="genStatus" class="inline-error" style="color:var(--accent)" hidden></div>
-          </div>
-          <!-- Jobs tab -->
-          <div id="reportPanelJobs" hidden>
-            <button id="refreshJobsBtn" class="secondary-button" type="button">↻ Refresh</button>
-            <div id="jobsList" class="jobs-list"></div>
-          </div>
-        </div>
-      </div>
-    </div>
 
     <!-- Delete Workspace Confirmation Modal -->
     <div id="deleteWsModal" class="modal-overlay" hidden>
@@ -465,9 +467,14 @@
         const tabs = document.querySelectorAll('.sidebar-tab-btn');
         const panelChats = document.querySelector('.session-panel');
         const panelWiki = document.querySelector('.wiki-panel');
-        const panelConflicts = document.querySelector('.conflicts-panel');
+        const panelResearch = document.querySelector('.research-panel');
 
         function switchTab(tabId) {
+          // If we had conflicts saved, fallback to wiki since conflicts is merged there
+          if (tabId === 'conflicts') {
+            tabId = 'wiki';
+          }
+          
           tabs.forEach(btn => {
             const isActive = btn.dataset.tab === tabId;
             btn.classList.toggle('active', isActive);
@@ -477,15 +484,19 @@
           if (tabId === 'chats') {
             panelChats.style.display = 'flex';
             panelWiki.style.display = 'none';
-            panelConflicts.style.display = 'none';
+            panelResearch.style.display = 'none';
           } else if (tabId === 'wiki') {
             panelChats.style.display = 'none';
             panelWiki.style.display = 'flex';
-            panelConflicts.style.display = 'none';
-          } else if (tabId === 'conflicts') {
+            panelResearch.style.display = 'none';
+          } else if (tabId === 'research') {
             panelChats.style.display = 'none';
             panelWiki.style.display = 'none';
-            panelConflicts.style.display = 'flex';
+            panelResearch.style.display = 'flex';
+            // Trigger a load/refresh of research papers list when the tab is clicked
+            if (window.refreshResearchPapers) {
+              window.refreshResearchPapers();
+            }
           }
         }
 

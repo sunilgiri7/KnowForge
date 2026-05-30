@@ -280,7 +280,6 @@ def export_docx(
     template_name: str = "Report",
 ) -> bytes:
     from docx import Document
-    from docx.shared import Pt, RGBColor
     from docx.enum.text import WD_ALIGN_PARAGRAPH
 
     doc = Document()
@@ -760,9 +759,30 @@ async def generate_report_from_chat(
             difficulty="easy",
         )
 
+    # Smart candidate pre-selection using BM25 & explicit mentions to prevent token bloat
+    from app.llmwiki.indexer import WikiIndexer
+    indexer = WikiIndexer(store)
+    
+    q_lower = request.question.lower()
+    is_global_query = any(w in q_lower for w in ["all", "every", "whole", "each", "complete", "workspace"])
+    
+    if is_global_query:
+        pages_to_show = pages[:30]
+    else:
+        mentions = indexer.resolve_slug_mentions(request.question)
+        candidates = indexer.find_candidates(request.question, limit=12)
+        candidate_slugs = set(mentions) | {c.slug for c in candidates}
+        if candidate_slugs:
+            pages_to_show = [p for p in pages if p.slug in candidate_slugs]
+            if len(pages_to_show) < 15:
+                remaining = [p for p in pages if p.slug not in candidate_slugs]
+                pages_to_show.extend(remaining[:15 - len(pages_to_show)])
+        else:
+            pages_to_show = pages[:15]
+
     wiki_pages_list = "\n".join(
         f"- slug: {p.slug}, title: {p.title}, summary: {p.summary}"
-        for p in pages
+        for p in pages_to_show
     )
     prompt = safe_format(
         ANALYZE_CHAT_REPORT_PROMPT,
@@ -802,7 +822,7 @@ async def generate_report_from_chat(
 
     scope_slugs = analysis.get("scope_slugs") or []
     if not scope_slugs:
-        scope_slugs = [p.slug for p in pages]
+        scope_slugs = [p.slug for p in pages_to_show]
 
     # Create the template
     template = ReportTemplate(
@@ -850,11 +870,16 @@ async def generate_report_from_chat(
             f"- **Format**: {fmt.upper()}\n"
             f"- **Scope**: {used_slugs_str}\n\n"
             f"📥 **Download Link**:\n"
-            f"[Click here to download your report](/api/v1/reports/{job.id}/download?format={fmt})\n\n"
-            f"You can also manage this template and view all past generation jobs in the **📊 Report Generator** modal by clicking the report icon at the bottom of the sidebar."
+            f"[Click here to download your report](/api/v1/reports/{job.id}/download?format={fmt})"
         )
     else:
-        ans = "I'm sorry, but I am currently unable to process your report request. Please try again shortly."
+        err = job.error_message or "An unexpected error occurred during document generation."
+        ans = (
+            f"I am sorry, I was unable to generate your report.\n\n"
+            f"❌ **Error Details**:\n"
+            f"> {err}\n\n"
+            f"Please verify your LLM settings, check if the selected wiki pages contain valid content, and try again."
+        )
 
     return ChatResponse(
         session_id=request.session_id,

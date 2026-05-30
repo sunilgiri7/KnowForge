@@ -397,3 +397,110 @@ class ReportJob(Base):
 
     template: Mapped[ReportTemplate] = relationship(foreign_keys=[template_id])
     creator: Mapped[User | None] = relationship(foreign_keys=[created_by])
+
+
+# ---------------------------------------------------------------------------
+# Tier 3: Research Intelligence Models
+# ---------------------------------------------------------------------------
+
+
+class ResearchPaper(Base):
+    __tablename__ = "research_papers"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"), index=True)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    authors: Mapped[str] = mapped_column(Text, default="[]")  # JSON list of author names
+    venue: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    doi: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
+    publication_year: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    abstract: Mapped[str | None] = mapped_column(Text, nullable=True)
+    slug: Mapped[str] = mapped_column(String(255), index=True)  # Matches compiled wiki slug
+    file_path: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+    sections: Mapped[list[ResearchPaperSection]] = relationship(
+        back_populates="paper", cascade="all, delete-orphan"
+    )
+    methods: Mapped[list[ResearchMethod]] = relationship(
+        back_populates="paper", cascade="all, delete-orphan"
+    )
+    claims: Mapped[list[ResearchClaim]] = relationship(
+        back_populates="paper", cascade="all, delete-orphan"
+    )
+
+
+class ResearchPaperSection(Base):
+    __tablename__ = "research_paper_sections"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    paper_id: Mapped[str] = mapped_column(ForeignKey("research_papers.id", ondelete="CASCADE"), index=True)
+    heading: Mapped[str] = mapped_column(String(255), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    section_type: Mapped[str] = mapped_column(String(50))  # e.g., introduction, methodology, results, etc.
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+    paper: Mapped[ResearchPaper] = relationship(back_populates="sections")
+
+
+class ResearchMethod(Base):
+    __tablename__ = "research_methods"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"), index=True)
+    paper_id: Mapped[str] = mapped_column(ForeignKey("research_papers.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    dataset_used: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+    paper: Mapped[ResearchPaper] = relationship(back_populates="methods")
+
+
+class ResearchClaim(Base):
+    __tablename__ = "research_claims"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"), index=True)
+    paper_id: Mapped[str] = mapped_column(ForeignKey("research_papers.id", ondelete="CASCADE"), index=True)
+    claim_text: Mapped[str] = mapped_column(Text, nullable=False)
+    category: Mapped[str] = mapped_column(String(50), default="finding")  # finding, limitation, hypothesis, gap
+    evidence: Mapped[str | None] = mapped_column(Text, nullable=True)
+    grounding_level: Mapped[str] = mapped_column(String(40), default="fully_supported")  # fully_supported, partially_supported, unsupported
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+    paper: Mapped[ResearchPaper] = relationship(back_populates="claims")
+
+
+class ResearchPaperEdge(Base):
+    __tablename__ = "research_paper_edges"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"), index=True)
+    source_paper_id: Mapped[str] = mapped_column(ForeignKey("research_papers.id", ondelete="CASCADE"), index=True)
+    target_paper_id: Mapped[str] = mapped_column(ForeignKey("research_papers.id", ondelete="CASCADE"), index=True)
+    relation_type: Mapped[str] = mapped_column(String(50), nullable=False)  # cites, extends, contradicts, uses_method, baseline
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class ResearchInsight(Base):
+    __tablename__ = "research_insights"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"), index=True)
+    insight_type: Mapped[str] = mapped_column(String(50), nullable=False)  # comparison_matrix, literature_gap
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    content_json: Mapped[str] = mapped_column(Text, default="{}")  # JSON payload structure
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class ResearchAnalysisJob(Base):
+    __tablename__ = "research_analysis_jobs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"), index=True)
+    paper_id: Mapped[str] = mapped_column(ForeignKey("research_papers.id", ondelete="CASCADE"), index=True)
+    status: Mapped[str] = mapped_column(String(20), default="pending")  # pending | processing | done | failed
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

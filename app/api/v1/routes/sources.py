@@ -16,6 +16,41 @@ from app.services.workspace import get_member, require_role
 router = APIRouter(prefix="/sources", tags=["sources"])
 
 
+async def run_research_pipeline_bg(
+    workspace_id: str,
+    filename: str,
+    text: str,
+    slug: str,
+    file_path: str | None,
+    user_id: str,
+    force_research: bool = False
+):
+    from app.db.session import SessionLocal
+    from app.llmwiki.research import ResearchPaperAnalyzer
+    from app.db.models import User
+    from app.services.llm_factory import build_user_llm
+
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter_by(id=user_id).first()
+        if not user:
+            return
+        llm = build_user_llm(db, user)
+        analyzer = ResearchPaperAnalyzer(db, llm=llm)
+        await analyzer.run_pipeline(
+            workspace_id=workspace_id,
+            filename=filename,
+            text=text,
+            slug=slug,
+            file_path=file_path,
+            force_research=force_research
+        )
+    except Exception as e:
+        print(f"[Research Ingest BG Error]: {e}")
+    finally:
+        db.close()
+
+
 @router.post("/upload", response_model=SourceUploadResponse)
 async def upload_pdf(
     file: Annotated[UploadFile, File(...)],
@@ -23,6 +58,7 @@ async def upload_pdf(
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
     compile_wiki: bool = True,
+    force_research: bool = False,
 ) -> SourceUploadResponse:
     require_role(get_member(db, workspace_id=workspace.id, user_id=user.id), "editor")
     if not file.filename:
@@ -69,4 +105,20 @@ async def upload_pdf(
             page=page,
             workspace_id=workspace.id,
         )
+
+        # Trigger Research Paper Ingest pipeline (Phase 2)
+        import asyncio
+        source_path = str(store.page_path(response.wiki_page_slug))
+        asyncio.create_task(
+            run_research_pipeline_bg(
+                workspace_id=workspace.id,
+                filename=file.filename,
+                text=page.content,
+                slug=page.meta.slug,
+                file_path=source_path,
+                user_id=user.id,
+                force_research=force_research
+            )
+        )
+
     return response
