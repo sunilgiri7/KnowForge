@@ -1,3 +1,4 @@
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -7,12 +8,22 @@ from fastapi.staticfiles import StaticFiles
 from app.api.v1.router import api_router
 from app.core.config import settings
 from app.core.errors import KnowForgeError, knowforge_error_handler
+from app.services.tier4_scheduler import start_tier4_scheduler, stop_tier4_scheduler
 
 WEB_DIR = Path(__file__).parent / "web" / "static"
 
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    start_tier4_scheduler()
+    try:
+        yield
+    finally:
+        stop_tier4_scheduler()
+
+
 def create_app() -> FastAPI:
-    app = FastAPI(title=settings.app_name, debug=settings.app_debug)
+    app = FastAPI(title=settings.app_name, debug=settings.app_debug, lifespan=lifespan)
     app.add_exception_handler(KnowForgeError, knowforge_error_handler)
     app.include_router(api_router, prefix=settings.api_v1_prefix)
     app.mount("/static", StaticFiles(directory=WEB_DIR), name="static")

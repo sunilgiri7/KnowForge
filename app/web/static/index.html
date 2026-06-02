@@ -118,28 +118,36 @@
             <div id="emptySessions" class="empty-mini">No saved chats yet.</div>
           </section>
 
-          <!-- Panel 2: Wiki Pages (Hidden by Default) -->
+          <!-- Panel 2: Wiki Library (Hidden by Default) -->
           <section class="panel wiki-panel" style="display: none;">
-            <!-- Group Upload inside Wiki tab for organic workspace management -->
-            <div class="sources-section">
+            <div class="sources-section compact-sources-section">
               <div class="panel-heading">
                 <h2>Source Documents</h2>
                 <span id="uploadState" class="status-pill">Ready</span>
               </div>
-              <label class="upload-zone" for="pdfInput" id="dropZone">
+              <label class="upload-zone compact-upload-zone" for="pdfInput" id="dropZone">
                 <svg class="upload-zone-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
                 <span>
                   <strong>Upload PDF</strong>
-                  <small>Drag & drop or click to choose</small>
+                  <small>Drag, drop, or choose</small>
                 </span>
               </label>
               <input id="pdfInput" type="file" accept="application/pdf" hidden />
               <div id="uploadError" class="inline-error" hidden></div>
             </div>
 
-            <div class="wiki-pages-section">
+            <div class="wiki-sidebar-summary">
+              <button class="wiki-sidebar-chip" data-wiki-view="overview" type="button"><strong id="healthScoreValue">--</strong><span>health</span></button>
+              <button class="wiki-sidebar-chip" data-wiki-view="risks" type="button"><strong id="pulseExpiringCount">0</strong><span>risks</span></button>
+              <button class="wiki-sidebar-chip" id="pulseReviewBtn" type="button"><strong id="pulseDueCount">0</strong><span>due</span></button>
+            </div>
+            <span id="healthTrendPill" class="status-pill muted sidebar-trend-pill">flat</span>
+            <div id="healthActions" class="sidebar-health-actions"></div>
+            <div id="healthBreakdown" class="sr-only"></div>
+
+            <div class="wiki-pages-section sidebar-library-section">
               <div class="panel-heading">
-                <h2>Wiki Pages</h2>
+                <h2>Wiki Library</h2>
                 <div class="heading-actions">
                   <button id="compactWikiBtn" class="icon-button" type="button" title="Compact Wiki">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22V12M12 12L7 17M12 12l5 5M12 2L7 7m5-5l5 5"></path></svg>
@@ -150,54 +158,40 @@
                 </div>
               </div>
               <div id="wikiList" class="wiki-list"></div>
-              <div id="emptyWiki" class="empty-mini">Upload a PDF or create a page to start.</div>
-            </div>
-
-            <!-- Factual Conflicts Integrated inside Wiki Panel -->
-            <div class="wiki-conflicts-section" style="border-top: 1px solid var(--line); margin-top: 16px; padding-top: 16px;">
-              <div class="panel-heading">
-                <h2>Factual Conflicts</h2>
-                <button id="scanConflictsBtn" class="primary-button" type="button" title="Scan wiki for contradictions" style="font-size: 11px; padding: 4px 10px; height: auto;">
-                  <span>⚡ Scan</span>
-                </button>
-              </div>
-              <p class="panel-hint" style="margin-bottom: 8px;">Cross-page factual mismatches detected by KnowForge.</p>
-              <div id="conflictsList" class="conflicts-list"></div>
-              <div id="emptyConflicts" class="empty-mini">No open conflicts. Scan after uploading related documents.</div>
+              <div id="emptyWiki" class="empty-mini">Upload a PDF to start your library.</div>
             </div>
           </section>
 
           <!-- Panel 4: Research (Hidden by Default) -->
           <section class="panel research-panel" style="display: none;">
             <div class="panel-heading">
-              <h2>Research</h2>
+              <h2>Research Library</h2>
               <button id="refreshResearchBtn" class="icon-button" type="button" title="Refresh research papers">
                 <span>↻</span>
               </button>
             </div>
-            <p class="panel-hint">Academic intelligence & citation mapping.</p>
-            
-            <!-- Dedicated Research Paper Uploader -->
-            <div id="researchUploadArea" style="margin: 8px 12px; padding: 16px 12px; border: 2px dashed var(--line); border-radius: 6px; text-align: center; background: var(--bg-hover); cursor: pointer; transition: all 0.2s ease;">
-              <div id="researchUploadDefault">
-                <span style="font-size: 12px; color: var(--muted); font-weight: 600; display: block; margin-bottom: 4px;">📂 Upload Research PDF</span>
-                <span style="font-size: 10px; color: var(--muted); display: block;">Forces extraction pipeline</span>
-              </div>
-              <div id="researchUploadActive" style="display: none; flex-direction: column; align-items: center; justify-content: center; gap: 8px;">
-                <div class="thinking-spinner" style="width: 16px; height: 16px; margin: 0 auto;"></div>
-                <span id="researchUploadMessage" style="font-size: 11px; color: var(--muted); font-weight: 500; display: block;">Uploading document...</span>
-              </div>
-              <input type="file" id="researchPdfInput" accept=".pdf" style="display: none;" />
+            <p class="panel-hint">Select papers to compare, map, or analyze for gaps.</p>
+
+            <button id="researchUploadArea" class="research-upload-card" type="button">
+              <span id="researchUploadDefault" class="research-upload-default">
+                <strong>Upload research PDF</strong>
+                <small>Runs the academic extraction pipeline</small>
+              </span>
+              <span id="researchUploadActive" class="research-upload-active">
+                <span class="thinking-spinner"></span>
+                <small id="researchUploadMessage">Uploading document...</small>
+              </span>
+              <input type="file" id="researchPdfInput" accept=".pdf" hidden />
+            </button>
+
+            <div class="research-sidebar-stats">
+              <button class="wiki-sidebar-chip" id="researchSelectedChip" type="button"><strong id="researchSelectedCount">0</strong><span>selected</span></button>
+              <button class="wiki-sidebar-chip" id="researchAnalyzedChip" type="button"><strong id="researchAnalyzedCount">0</strong><span>ready</span></button>
+              <button class="wiki-sidebar-chip" id="researchProcessingChip" type="button"><strong id="researchProcessingCount">0</strong><span>running</span></button>
             </div>
 
-            <div class="research-global-actions">
-              <button id="researchGraphBtn" class="primary-button" type="button">⚡ Graph</button>
-              <button id="researchCompareBtn" class="primary-button" type="button">📊 Compare</button>
-              <button id="researchGapsBtn" class="primary-button" type="button">🔍 Gaps</button>
-            </div>
-
-            <div id="researchList" class="wiki-list"></div>
-            <div id="emptyResearch" class="empty-mini">No research papers ingested yet. Upload academic PDFs in the Wiki tab.</div>
+            <div id="researchList" class="wiki-list research-list"></div>
+            <div id="emptyResearch" class="empty-mini">Upload research PDFs to build your literature workspace.</div>
           </section>
         </div>
 
@@ -228,9 +222,190 @@
           <div class="topbar-left">
             <h2 id="chatBoardTitle"></h2>
           </div>
+          <div class="topbar-right">
+            <button id="reviewFlashcardsBtn" class="topbar-action" type="button" title="Review flashcards">Review <span id="flashcardDueBadge" class="mini-badge">0</span></button>
+            <div class="notification-wrap">
+              <button id="notificationBellBtn" class="icon-button notification-bell" type="button" title="Notifications">
+                <span>🔔</span><span id="notificationBadge" class="notification-badge" hidden>0</span>
+              </button>
+              <div id="notificationPopover" class="notification-popover" hidden>
+                <div class="notification-popover-head">
+                  <strong>Notifications</strong>
+                  <button id="generateDigestBtn" class="text-button" type="button">Digest</button>
+                </div>
+                <div id="notificationList" class="notification-list"></div>
+                <div id="emptyNotifications" class="empty-mini">No notifications yet.</div>
+              </div>
+            </div>
+          </div>
         </header>
 
         <section id="chatBoard" class="chat-board" aria-live="polite"></section>
+
+        <section id="researchBoard" class="research-board" hidden>
+          <div class="research-studio-shell">
+            <header class="research-studio-header">
+              <div>
+                <span class="pulse-label">Research Studio</span>
+                <h1>Build a clear map of your literature</h1>
+                <p id="researchStudioInsight">Upload papers, select a working set, then compare methods, claims, and gaps.</p>
+              </div>
+              <div class="research-studio-actions">
+                <button id="researchGraphBtn" class="secondary-button" type="button">Map</button>
+                <button id="researchCompareBtn" class="secondary-button" type="button">Compare</button>
+                <button id="researchGapsBtn" class="primary-button" type="button">Find Gaps</button>
+              </div>
+            </header>
+
+            <section class="research-metric-grid">
+              <article class="research-metric-card"><span>Papers</span><strong id="researchTotalCount">0</strong><small>Total in workspace</small></article>
+              <article class="research-metric-card"><span>Ready</span><strong id="researchReadyCount">0</strong><small>Analyzed papers</small></article>
+              <article class="research-metric-card"><span>Claims</span><strong id="researchClaimCount">0</strong><small>Findings and limits</small></article>
+              <article class="research-metric-card"><span>Methods</span><strong id="researchMethodCount">0</strong><small>Models and datasets</small></article>
+            </section>
+
+            <section class="research-workbench-grid">
+              <article class="research-workbench-panel research-paper-focus">
+                <div class="knowledge-panel-head">
+                  <h2>Paper Focus</h2>
+                  <button id="researchOpenDetailsBtn" class="text-button" type="button">Open Details</button>
+                </div>
+                <div id="researchFocusContent" class="research-focus-content">
+                  <p class="empty-mini">Choose a paper from the library to see its abstract, methods, and strongest extracted claims.</p>
+                </div>
+              </article>
+
+              <article class="research-workbench-panel">
+                <div class="knowledge-panel-head">
+                  <h2>Selected Set</h2>
+                  <button id="researchClearSelectionBtn" class="text-button" type="button">Clear</button>
+                </div>
+                <div id="researchSelectionList" class="research-selection-list">
+                  <p class="empty-mini">Select papers in the sidebar to make a comparison set.</p>
+                </div>
+                <div class="research-action-stack">
+                  <button id="researchBoardCompareBtn" class="secondary-button" type="button">Compare selected papers</button>
+                  <button id="researchBoardGapsBtn" class="primary-button" type="button">Find research gaps</button>
+                </div>
+              </article>
+
+              <article class="research-workbench-panel">
+                <div class="knowledge-panel-head">
+                  <h2>Workspace Map</h2>
+                  <button id="researchBoardGraphBtn" class="text-button" type="button">Open Map</button>
+                </div>
+                <div id="researchMapPreview" class="research-map-preview">
+                  <p class="empty-mini">The citation and contradiction graph appears after papers reference each other.</p>
+                </div>
+              </article>
+            </section>
+          </div>
+        </section>
+
+        <section id="knowledgeBoard" class="knowledge-board" hidden>
+          <div class="knowledge-center-shell">
+            <header class="knowledge-center-header">
+              <div>
+                <span class="pulse-label">Knowledge Center</span>
+                <h1>Workspace Pulse</h1>
+              </div>
+              <div class="knowledge-center-actions">
+                <button id="knowledgeDigestBtn" class="secondary-button" type="button">Daily Digest</button>
+                <button id="knowledgeReviewBtn" class="primary-button" type="button">Review Cards</button>
+              </div>
+            </header>
+
+            <section class="knowledge-command-grid">
+              <article class="knowledge-hero-panel">
+                <div class="knowledge-score-large">
+                  <span>Health</span>
+                  <strong id="knowledgeHealthScoreMirror">--</strong>
+                  <small id="knowledgeHealthTrendMirror">flat</small>
+                </div>
+                <div class="knowledge-score-copy">
+                  <h2>What needs attention today</h2>
+                  <p id="knowledgeInsightText">Your workspace pulse will appear here after the first health check.</p>
+                  <div class="knowledge-action-row">
+                    <button class="knowledge-action-card" data-wiki-view="risks" type="button"><strong id="knowledgeRiskCount">0</strong><span>time-sensitive facts</span></button>
+                    <button class="knowledge-action-card" data-wiki-view="risks" type="button"><strong id="knowledgeConflictCount">0</strong><span>open conflicts</span></button>
+                    <button class="knowledge-action-card" id="knowledgeDueCardBtn" type="button"><strong id="knowledgeDueCount">0</strong><span>cards due</span></button>
+                  </div>
+                </div>
+              </article>
+
+              <article class="knowledge-panel knowledge-digest-preview">
+                <div class="knowledge-panel-head">
+                  <h2>Morning Digest</h2>
+                  <button class="text-button" id="knowledgeOpenDigestBtn" type="button">Open</button>
+                </div>
+                <div id="knowledgeDigestPreview" class="knowledge-preview-list">
+                  <p class="empty-mini">Generate a digest to see the day’s priorities.</p>
+                </div>
+              </article>
+            </section>
+
+            <nav class="knowledge-view-tabs" aria-label="Knowledge center views">
+              <button class="wiki-subtab active" data-wiki-view="overview" type="button">Overview</button>
+              <button class="wiki-subtab" data-wiki-view="risks" type="button">Risks</button>
+              <button class="wiki-subtab" data-wiki-view="learning" type="button">Learning</button>
+            </nav>
+
+            <section class="knowledge-view-panel" data-wiki-panel="overview">
+              <div class="knowledge-panel-grid">
+                <article class="knowledge-panel">
+                  <h2>Health Breakdown</h2>
+                  <div id="knowledgeHealthBreakdown" class="knowledge-breakdown-list"></div>
+                </article>
+                <article class="knowledge-panel">
+                  <h2>Recommended Actions</h2>
+                  <div id="knowledgeActionsList" class="knowledge-preview-list"></div>
+                </article>
+              </div>
+            </section>
+
+            <section class="knowledge-view-panel" data-wiki-panel="risks" hidden>
+              <div class="knowledge-risk-layout">
+                <article class="knowledge-panel">
+                  <div class="knowledge-panel-head">
+                    <h2>Fact Timeline</h2>
+                    <div class="timeline-header-actions">
+                      <button id="markTimelineReadBtn" class="secondary-button" type="button">Mark visible read</button>
+                      <button id="refreshTimelineBtn" class="icon-button" type="button" title="Refresh risks"><span>↻</span></button>
+                    </div>
+                  </div>
+                  <div class="timeline-filters" role="tablist">
+                    <button class="timeline-filter active" data-status="all" type="button">All</button>
+                    <button class="timeline-filter" data-status="expired" type="button">Expired</button>
+                    <button class="timeline-filter" data-status="expiring" type="button">Soon</button>
+                    <button class="timeline-filter" data-status="current" type="button">Current</button>
+                    <button class="timeline-filter" data-status="reviewed" type="button">Reviewed</button>
+                  </div>
+                  <div id="timelineList" class="timeline-list"></div>
+                  <div id="emptyTimeline" class="empty-mini">No temporal facts found yet.</div>
+                </article>
+                <article class="knowledge-panel">
+                  <div class="knowledge-panel-head">
+                    <h2>Factual Conflicts</h2>
+                    <button id="scanConflictsBtn" class="secondary-button" type="button">Scan</button>
+                  </div>
+                  <div id="conflictsList" class="conflicts-list"></div>
+                  <div id="emptyConflicts" class="empty-mini">No open conflicts. Scan after uploading related documents.</div>
+                </article>
+              </div>
+            </section>
+
+            <section class="knowledge-view-panel" data-wiki-panel="learning" hidden>
+              <article class="knowledge-panel learning-panel">
+                <div>
+                  <h2>Review what you uploaded</h2>
+                  <p>Flashcards turn wiki pages into short daily recall sessions.</p>
+                </div>
+                <button id="knowledgeGenerateCardsBtn" class="secondary-button" type="button">Generate Cards</button>
+                <button id="knowledgeStartReviewBtn" class="primary-button" type="button">Start Review</button>
+              </article>
+            </section>
+          </div>
+        </section>
 
         <footer class="composer-wrap">
           <div id="replyBanner" class="reply-banner" hidden>
@@ -292,53 +467,77 @@
 
     <!-- Research intelligence modal -->
     <div id="researchModal" class="modal-overlay" hidden>
-      <div class="modal-card research-modal-card" role="dialog" aria-modal="true" aria-labelledby="researchModalTitle" style="max-width: 900px; width: 95%; max-height: 90vh; display: flex; flex-direction: column; overflow: hidden;">
-        <div class="modal-header" style="flex-shrink: 0; padding-bottom: 12px; border-bottom: 1px solid var(--line);">
+      <div class="modal-card research-modal-card" role="dialog" aria-modal="true" aria-labelledby="researchModalTitle">
+        <div class="modal-header research-modal-header">
           <strong id="researchModalTitle">Research Intelligence</strong>
           <button id="researchModalCloseBtn" class="icon-button" type="button" title="Close">✕</button>
         </div>
-        
-        <div class="research-sub-tabs" style="display: flex; gap: 4px; padding: 12px 16px 0; border-bottom: 1px solid var(--line); flex-shrink: 0;">
-          <button class="research-sub-tab active" data-subtab="details" type="button">Paper Details</button>
-          <button class="research-sub-tab" data-subtab="graph" type="button">Citation Graph</button>
-          <button class="research-sub-tab" data-subtab="compare" type="button">Comparison Matrix</button>
-          <button class="research-sub-tab" data-subtab="gaps" type="button">Literature Gaps</button>
+
+        <div class="research-sub-tabs">
+          <button class="research-sub-tab active" data-subtab="details" type="button">Paper</button>
+          <button class="research-sub-tab" data-subtab="graph" type="button">Map</button>
+          <button class="research-sub-tab" data-subtab="compare" type="button">Compare</button>
+          <button class="research-sub-tab" data-subtab="gaps" type="button">Gaps</button>
         </div>
 
-        <div class="modal-body" style="padding: 16px; flex: 1; overflow-y: auto; display: flex; flex-direction: column; min-height: 0;">
+        <div class="modal-body research-modal-body">
           <div id="researchDetailsPanel" class="research-sub-panel">
-            <div id="paperDetailsContent" class="empty-mini">Select a research paper from the sidebar list to analyze details.</div>
+            <div id="paperDetailsContent" class="empty-mini">Select a paper from the library to inspect methods, claims, evidence, and sections.</div>
           </div>
 
-          <div id="researchGraphPanel" class="research-sub-panel" style="display: none; height: 100%; display: flex; flex-direction: column;">
-            <div id="researchGraphCanvasContainer" style="position: relative; flex: 1; min-height: 350px; background: var(--bg-hover); border-radius: 6px; overflow: hidden; border: 1px solid var(--line);">
-              <div id="researchGraphCanvas" style="width: 100%; height: 100%; display: flex; flex-direction: column; padding: 16px;"></div>
+          <div id="researchGraphPanel" class="research-sub-panel" hidden>
+            <div id="researchGraphCanvasContainer" class="research-graph-frame">
+              <div id="researchGraphCanvas" class="research-graph-canvas"></div>
             </div>
-            <p style="font-size: 11px; color: var(--muted); margin-top: 8px;">Workspace semantic connection graph. Nodes represent uploaded papers, lines show citation/contradiction references.</p>
+            <p class="research-panel-note">Map shows citation and contradiction edges between papers in this workspace.</p>
           </div>
 
-          <div id="researchComparePanel" class="research-sub-panel" style="display: none; height: 100%; display: flex; flex-direction: column; gap: 12px;">
-            <div style="display: flex; gap: 12px; align-items: flex-end; flex-shrink: 0; flex-wrap: wrap;">
-              <div style="flex: 1; min-width: 250px; display: flex; flex-direction: column; gap: 4px;">
-                <span style="font-size: 11px; font-weight: 600; color: var(--muted);">Custom Synthesis Query (Optional)</span>
-                <input type="text" id="compareQueryInput" placeholder="e.g. Compare model architectures or accuracy metrics" style="width: 100%; padding: 8px 12px; border-radius: 4px; border: 1px solid var(--line); background: var(--bg); color: var(--text); font-size: 13px;" />
-              </div>
-              <button id="runCompareBtn" class="primary-button" style="height: 36px; padding: 0 16px; font-size: 13px;" type="button">⚡ Generate Comparison Matrix</button>
+          <div id="researchComparePanel" class="research-sub-panel" hidden>
+            <div class="research-runbar">
+              <label class="research-query-field">
+                <span>Focus question</span>
+                <input type="text" id="compareQueryInput" placeholder="Compare architecture, datasets, metrics, or limitations" />
+              </label>
+              <button id="runCompareBtn" class="primary-button" type="button">Generate Matrix</button>
             </div>
-            <div id="compareMatrixResult" style="flex: 1; overflow-y: auto; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); min-height: 250px;">
-              <p class="empty-mini" style="padding: 32px;">Click "Generate Comparison Matrix" to compile methodology properties.</p>
+            <div id="compareMatrixResult" class="research-result-pane">
+              <p class="empty-mini">Select papers, then generate a comparison matrix.</p>
             </div>
           </div>
 
-          <div id="researchGapsPanel" class="research-sub-panel" style="display: none; height: 100%; display: flex; flex-direction: column; gap: 12px;">
-            <div style="display: flex; justify-content: flex-end; flex-shrink: 0;">
-              <button id="runGapsBtn" class="primary-button" type="button">⚡ Analyze Workspace Gaps</button>
+          <div id="researchGapsPanel" class="research-sub-panel" hidden>
+            <div class="research-runbar right">
+              <button id="runGapsBtn" class="primary-button" type="button">Analyze Gaps</button>
             </div>
-            <div id="gapsResult" style="flex: 1; overflow-y: auto; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); padding: 16px; min-height: 250px;">
-              <p class="empty-mini" style="padding: 32px;">Analyze workspace claims and limitations to detect open opportunities.</p>
+            <div id="gapsResult" class="research-result-pane padded">
+              <p class="empty-mini">Analyze claims, methods, datasets, and limitations to find research opportunities.</p>
             </div>
           </div>
         </div>
+      </div>
+    </div>
+
+    <div id="digestModal" class="modal-overlay" hidden>
+      <div class="modal-card digest-card" role="dialog" aria-modal="true" aria-labelledby="digestTitle">
+        <div class="modal-header">
+          <strong id="digestTitle">Daily Knowledge Digest</strong>
+          <button id="digestCloseBtn" class="icon-button" type="button" title="Close">✕</button>
+        </div>
+        <div id="digestBody" class="digest-body"></div>
+      </div>
+    </div>
+
+    <div id="flashcardModal" class="modal-overlay" hidden>
+      <div class="modal-card flashcard-card" role="dialog" aria-modal="true" aria-labelledby="flashcardTitle">
+        <div class="modal-header">
+          <strong id="flashcardTitle">Review Flashcards</strong>
+          <button id="flashcardCloseBtn" class="icon-button" type="button" title="Close">✕</button>
+        </div>
+        <div class="flashcard-toolbar">
+          <span id="flashcardStatsText">No cards yet.</span>
+          <button id="generateFlashcardsBtn" class="secondary-button" type="button">Generate Cards</button>
+        </div>
+        <div id="flashcardBody" class="flashcard-body"></div>
       </div>
     </div>
 
@@ -468,6 +667,24 @@
         const panelChats = document.querySelector('.session-panel');
         const panelWiki = document.querySelector('.wiki-panel');
         const panelResearch = document.querySelector('.research-panel');
+        const chatBoard = document.querySelector('#chatBoard');
+        const knowledgeBoard = document.querySelector('#knowledgeBoard');
+        const researchBoard = document.querySelector('#researchBoard');
+        const composerWrap = document.querySelector('.composer-wrap');
+        const chatTitle = document.querySelector('#chatBoardTitle');
+
+        function setMainMode(mode) {
+          const isKnowledge = mode === 'knowledge';
+          const isResearch = mode === 'research';
+          if (chatBoard) chatBoard.hidden = isKnowledge || isResearch;
+          if (knowledgeBoard) knowledgeBoard.hidden = !isKnowledge;
+          if (researchBoard) researchBoard.hidden = !isResearch;
+          if (composerWrap) composerWrap.hidden = isKnowledge || isResearch;
+          if (chatTitle) {
+            if (isKnowledge) chatTitle.textContent = 'Knowledge Center';
+            else if (isResearch) chatTitle.textContent = 'Research Studio';
+          }
+        }
 
         function switchTab(tabId) {
           // If we had conflicts saved, fallback to wiki since conflicts is merged there
@@ -485,14 +702,17 @@
             panelChats.style.display = 'flex';
             panelWiki.style.display = 'none';
             panelResearch.style.display = 'none';
+            setMainMode('chat');
           } else if (tabId === 'wiki') {
             panelChats.style.display = 'none';
             panelWiki.style.display = 'flex';
             panelResearch.style.display = 'none';
+            setMainMode('knowledge');
           } else if (tabId === 'research') {
             panelChats.style.display = 'none';
             panelWiki.style.display = 'none';
             panelResearch.style.display = 'flex';
+            setMainMode('research');
             // Trigger a load/refresh of research papers list when the tab is clicked
             if (window.refreshResearchPapers) {
               window.refreshResearchPapers();

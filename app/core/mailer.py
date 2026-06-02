@@ -32,3 +32,23 @@ def send_verification_email(email: str, code: str) -> None:
         if settings.smtp_user and settings.smtp_password:
             smtp.login(settings.smtp_user, settings.smtp_password)
         smtp.send_message(message)
+
+
+def send_plain_email(email: str, subject: str, body: str) -> bool:
+    if not settings.smtp_host:
+        logger.warning("KnowForge email to %s: %s\n%s", email, subject, body)
+        return False
+
+    message = EmailMessage()
+    message["From"] = settings.smtp_from_email
+    message["To"] = email
+    message["Subject"] = subject
+    message.set_content(body)
+
+    with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=15) as smtp:
+        if settings.smtp_use_tls:
+            smtp.starttls()
+        if settings.smtp_user and settings.smtp_password:
+            smtp.login(settings.smtp_user, settings.smtp_password)
+        smtp.send_message(message)
+    return True

@@ -10,6 +10,12 @@ const API = {
   wikiPages: "/api/v1/wiki/pages",
   contradictions: "/api/v1/wiki/contradictions",
   compact: "/api/v1/wiki/compact",
+  timeline: "/api/v1/wiki/facts/timeline",
+  health: "/api/v1/wiki/health",
+  healthRecalculate: "/api/v1/wiki/health/recalculate",
+  notifications: "/api/v1/notifications",
+  digests: "/api/v1/digests",
+  flashcards: "/api/v1/flashcards",
   llmKeys: "/api/v1/llm/keys",
 };
 
@@ -44,6 +50,12 @@ const state = {
   thinkingTimers: new Map(),
   wikiPages: [],
   contradictions: [],
+  timeline: { items: [], counts: {}, status: "all" },
+  health: null,
+  notifications: { items: [], unread_count: 0 },
+  digest: null,
+  flashcards: { due: [], stats: null, currentIndex: 0, showingAnswer: false },
+  wikiView: "pages",
   scanningConflicts: false,
   wikiInsightSlug: null,
   pendingWikiContextSlug: null,
@@ -92,6 +104,49 @@ const els = {
   conflictsList: document.querySelector("#conflictsList"),
   emptyConflicts: document.querySelector("#emptyConflicts"),
   scanConflictsBtn: document.querySelector("#scanConflictsBtn"),
+  healthScoreValue: document.querySelector("#healthScoreValue"),
+  healthTrendPill: document.querySelector("#healthTrendPill"),
+  healthBreakdown: document.querySelector("#healthBreakdown"),
+  healthActions: document.querySelector("#healthActions"),
+  pulseExpiringCount: document.querySelector("#pulseExpiringCount"),
+  pulseConflictCount: document.querySelector("#pulseConflictCount"),
+  pulseDueCount: document.querySelector("#pulseDueCount"),
+  pulseReviewBtn: document.querySelector("#pulseReviewBtn"),
+  timelineList: document.querySelector("#timelineList"),
+  emptyTimeline: document.querySelector("#emptyTimeline"),
+  refreshTimelineBtn: document.querySelector("#refreshTimelineBtn"),
+  notificationBellBtn: document.querySelector("#notificationBellBtn"),
+  notificationBadge: document.querySelector("#notificationBadge"),
+  notificationPopover: document.querySelector("#notificationPopover"),
+  notificationList: document.querySelector("#notificationList"),
+  emptyNotifications: document.querySelector("#emptyNotifications"),
+  generateDigestBtn: document.querySelector("#generateDigestBtn"),
+  digestModal: document.querySelector("#digestModal"),
+  digestCloseBtn: document.querySelector("#digestCloseBtn"),
+  digestBody: document.querySelector("#digestBody"),
+  reviewFlashcardsBtn: document.querySelector("#reviewFlashcardsBtn"),
+  flashcardDueBadge: document.querySelector("#flashcardDueBadge"),
+  flashcardModal: document.querySelector("#flashcardModal"),
+  flashcardCloseBtn: document.querySelector("#flashcardCloseBtn"),
+  generateFlashcardsBtn: document.querySelector("#generateFlashcardsBtn"),
+  flashcardStatsText: document.querySelector("#flashcardStatsText"),
+  flashcardBody: document.querySelector("#flashcardBody"),
+  markTimelineReadBtn: document.querySelector("#markTimelineReadBtn"),
+  knowledgeHealthScoreMirror: document.querySelector("#knowledgeHealthScoreMirror"),
+  knowledgeHealthTrendMirror: document.querySelector("#knowledgeHealthTrendMirror"),
+  knowledgeInsightText: document.querySelector("#knowledgeInsightText"),
+  knowledgeRiskCount: document.querySelector("#knowledgeRiskCount"),
+  knowledgeConflictCount: document.querySelector("#knowledgeConflictCount"),
+  knowledgeDueCount: document.querySelector("#knowledgeDueCount"),
+  knowledgeHealthBreakdown: document.querySelector("#knowledgeHealthBreakdown"),
+  knowledgeActionsList: document.querySelector("#knowledgeActionsList"),
+  knowledgeDigestPreview: document.querySelector("#knowledgeDigestPreview"),
+  knowledgeDigestBtn: document.querySelector("#knowledgeDigestBtn"),
+  knowledgeOpenDigestBtn: document.querySelector("#knowledgeOpenDigestBtn"),
+  knowledgeReviewBtn: document.querySelector("#knowledgeReviewBtn"),
+  knowledgeDueCardBtn: document.querySelector("#knowledgeDueCardBtn"),
+  knowledgeGenerateCardsBtn: document.querySelector("#knowledgeGenerateCardsBtn"),
+  knowledgeStartReviewBtn: document.querySelector("#knowledgeStartReviewBtn"),
   wikiInsightModal: document.querySelector("#wikiInsightModal"),
   wikiInsightCloseBtn: document.querySelector("#wikiInsightCloseBtn"),
   wikiInsightTitle: document.querySelector("#wikiInsightTitle"),
@@ -595,6 +650,7 @@ async function bootstrapAuth() {
     state.user = await apiFetch(API.me);
     showApp(true);
     await Promise.all([loadWikiPages(), loadSessions(), loadLlmStatus(), loadConflicts()]);
+    loadTier4().catch((error) => console.warn("Tier 4 failed during bootstrap", error));
     
     const savedSessionId = localStorage.getItem(ACTIVE_SESSION_KEY);
     if (savedSessionId && state.sessions.some((s) => s.id === savedSessionId)) {
@@ -748,7 +804,10 @@ function renderChat() {
   const isEmpty = state.messages.length === 0;
   const titleEl = document.querySelector("#chatBoardTitle");
   if (titleEl) {
-    if (isEmpty) {
+    const knowledgeBoard = document.querySelector("#knowledgeBoard");
+    if (knowledgeBoard && !knowledgeBoard.hidden) {
+      titleEl.textContent = "Knowledge Center";
+    } else if (isEmpty) {
       titleEl.textContent = "";
     } else if (state.currentSessionId) {
       const currentSession = state.sessions.find((s) => s.id === state.currentSessionId);
@@ -1111,6 +1170,7 @@ function prefillWikiPrompt(page) {
   state.pendingWikiContextSlug = page.slug;
   const label = page.title || page.slug;
   const prompt = `Summarize "${label}" and Summarize what it is useful for.`;
+  document.querySelector('[data-tab="chats"]')?.click();
   els.messageInput.value = prompt;
   resizeTextarea();
   els.messageInput.focus();
@@ -1260,6 +1320,473 @@ async function dismissConflict(id) {
   }
 }
 
+
+async function loadTier4() {
+  const jobs = [loadHealth(), loadTimeline(), loadNotifications(), loadFlashcardStats()];
+  const results = await Promise.allSettled(jobs);
+  if (results.some((result) => result.status === "rejected")) {
+    console.warn("Some Tier 4 widgets failed to load.", results);
+  }
+}
+
+function setWikiView(view) {
+  if (view === "timeline" || view === "conflicts") view = "risks";
+  state.wikiView = view;
+  document.querySelectorAll(".wiki-subtab").forEach((btn) => {
+    const active = btn.dataset.wikiView === view;
+    btn.classList.toggle("active", active);
+    btn.setAttribute("aria-selected", active ? "true" : "false");
+  });
+  document.querySelectorAll(".knowledge-view-panel").forEach((panel) => {
+    panel.hidden = panel.dataset.wikiPanel !== view;
+  });
+}
+
+async function loadHealth() {
+  try {
+    state.health = await apiFetch(API.health);
+  } catch {
+    state.health = null;
+  }
+  renderHealth();
+}
+
+function renderHealth() {
+  if (!els.healthScoreValue) return;
+  const health = state.health;
+  const expiredSoon = (state.timeline.counts?.expired || 0) + (state.timeline.counts?.expiring || 0);
+  const conflictCount = state.contradictions?.length || health?.counts?.open_conflicts || 0;
+  const dueCount = state.flashcards.stats?.due_today || 0;
+
+  if (els.pulseExpiringCount) els.pulseExpiringCount.textContent = String(expiredSoon);
+  if (els.pulseConflictCount) els.pulseConflictCount.textContent = String(conflictCount);
+  if (els.pulseDueCount) els.pulseDueCount.textContent = String(dueCount);
+  if (els.knowledgeRiskCount) els.knowledgeRiskCount.textContent = String(expiredSoon);
+  if (els.knowledgeConflictCount) els.knowledgeConflictCount.textContent = String(conflictCount);
+  if (els.knowledgeDueCount) els.knowledgeDueCount.textContent = String(dueCount);
+
+  if (!health) {
+    els.healthScoreValue.textContent = "--";
+    if (els.knowledgeHealthScoreMirror) els.knowledgeHealthScoreMirror.textContent = "--";
+    if (els.knowledgeInsightText) els.knowledgeInsightText.textContent = "Health will appear after your workspace loads.";
+    els.healthActions.innerHTML = `<button type="button" class="health-action-chip" data-kind="digest">Open digest</button>`;
+    els.healthActions.querySelector("[data-kind='digest']")?.addEventListener("click", openDigest);
+    renderKnowledgeBreakdown(null);
+    renderKnowledgeActions([]);
+    return;
+  }
+
+  els.healthScoreValue.textContent = String(health.overall_score);
+  if (els.knowledgeHealthScoreMirror) els.knowledgeHealthScoreMirror.textContent = String(health.overall_score);
+  const trendLabel = `${health.trend || "flat"}${health.trend_delta ? ` ${health.trend_delta > 0 ? "+" : ""}${health.trend_delta}` : ""}`;
+  els.healthTrendPill.textContent = trendLabel;
+  els.healthTrendPill.className = "status-pill";
+  els.healthTrendPill.classList.add(health.trend === "down" ? "warn" : health.trend === "up" ? "success" : "muted");
+  if (els.knowledgeHealthTrendMirror) els.knowledgeHealthTrendMirror.textContent = trendLabel;
+
+  const actions = health.action_items || [];
+  const insight = actions[0]?.label || (expiredSoon || conflictCount ? "Risks are waiting for review." : "Your workspace is steady today.");
+  if (els.knowledgeInsightText) els.knowledgeInsightText.textContent = insight;
+
+  const sidebarActions = actions.filter((item) => item.kind !== "freshness");
+  els.healthActions.innerHTML = sidebarActions.length
+    ? sidebarActions.slice(0, 2).map((item) => `<button type="button" class="health-action-chip" data-kind="${escapeHtml(item.kind)}">${escapeHtml(item.label)}</button>`).join("")
+    : `<span class="sidebar-health-note">Workspace freshness is tracked in Health Breakdown.</span>`;
+  els.healthActions.querySelectorAll(".health-action-chip").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const kind = btn.dataset.kind;
+      if (kind === "digest") openDigest();
+      else setWikiView("risks");
+    });
+  });
+  renderKnowledgeBreakdown(health);
+  renderKnowledgeActions(actions);
+}
+
+function renderKnowledgeBreakdown(health) {
+  if (!els.knowledgeHealthBreakdown) return;
+  if (!health) {
+    els.knowledgeHealthBreakdown.innerHTML = `<p class="empty-mini">No score yet.</p>`;
+    return;
+  }
+  const rows = [
+    ["Freshness", health.freshness_score],
+    ["Accuracy", health.accuracy_score],
+    ["Completeness", health.completeness_score],
+    ["Currency", health.staleness_score],
+    ["Integrity", health.integrity_score],
+  ];
+  els.knowledgeHealthBreakdown.innerHTML = rows.map(([label, score]) => `
+    <div class="knowledge-breakdown-row"><span>${escapeHtml(label)}</span><div><i style="width:${score}%"></i></div><strong>${score}</strong></div>
+  `).join("");
+}
+
+function renderKnowledgeActions(actions) {
+  if (!els.knowledgeActionsList) return;
+  const actionable = actions.filter((item) => item.kind !== "freshness");
+  if (!actionable.length) {
+    els.knowledgeActionsList.innerHTML = `<button class="digest-row" type="button" data-action="digest"><strong>Read today's digest</strong><span>Start with a calm daily summary.</span></button>`;
+  } else {
+    els.knowledgeActionsList.innerHTML = actionable.slice(0, 5).map((item) => `
+      <button class="digest-row" type="button" data-action="${escapeHtml(item.kind)}"><strong>${escapeHtml(item.label)}</strong><span>${escapeHtml(item.priority || "normal")}</span></button>
+    `).join("");
+  }
+  els.knowledgeActionsList.querySelectorAll("[data-action]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      if (btn.dataset.action === "digest") openDigest();
+      else setWikiView("risks");
+    });
+  });
+}
+
+async function loadTimeline(status = state.timeline.status || "all") {
+  state.timeline.status = status;
+  try {
+    state.timeline = await apiFetch(`${API.timeline}?days_ahead=90&status=${encodeURIComponent(status)}`);
+    state.timeline.status = status;
+  } catch {
+    state.timeline = { items: [], counts: {}, status };
+  }
+  renderTimeline();
+  renderHealth();
+}
+
+function renderTimeline() {
+  if (!els.timelineList) return;
+  document.querySelectorAll(".timeline-filter").forEach((btn) => btn.classList.toggle("active", btn.dataset.status === state.timeline.status));
+  els.timelineList.innerHTML = "";
+  const items = state.timeline.items || [];
+  els.emptyTimeline.hidden = items.length > 0;
+  if (els.markTimelineReadBtn) {
+    const hasUnreviewed = items.some((fact) => fact.status !== "reviewed");
+    els.markTimelineReadBtn.disabled = !hasUnreviewed || state.timeline.status === "reviewed";
+  }
+  for (const fact of items) {
+    const row = document.createElement("article");
+    row.className = `timeline-card status-${fact.status}`;
+    const dateText = fact.expiration_date ? new Date(fact.expiration_date).toLocaleDateString() : "No expiry";
+    row.innerHTML = `
+      <div class="timeline-card-head">
+        <span class="timeline-status-dot"></span>
+        <strong>${escapeHtml(fact.subject || "Fact")}</strong>
+        <span class="timeline-date">${escapeHtml(dateText)}</span>
+      </div>
+      <p class="timeline-fact-line">${escapeHtml(fact.predicate || "relates to")} ${escapeHtml(fact.object_val || "")}</p>
+      <p class="timeline-quote">${escapeHtml(fact.source_quote || fact.page_slug)}</p>
+      <div class="timeline-actions">
+        <button type="button" class="text-button timeline-open" data-slug="${escapeHtml(fact.page_slug)}">Go to Page</button>
+        ${fact.status !== "reviewed" ? `<button type="button" class="text-button timeline-review" data-id="${escapeHtml(fact.id)}">Mark Reviewed</button>` : `<span class="wiki-badge">Reviewed</span>`}
+      </div>
+    `;
+    row.querySelector(".timeline-open")?.addEventListener("click", () => openWikiInsight(fact.page_slug));
+    row.querySelector(".timeline-review")?.addEventListener("click", () => markFactReviewed(fact.id));
+    els.timelineList.appendChild(row);
+  }
+}
+
+async function markVisibleTimelineReviewed() {
+  const status = state.timeline.status || "all";
+  if (status === "reviewed") {
+    toast("These facts are already reviewed.");
+    return;
+  }
+  setButtonLoading(els.markTimelineReadBtn, true, "Marking...");
+  try {
+    const result = await apiFetch("/api/v1/wiki/facts/review-bulk", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        status,
+        days_ahead: 90,
+        review_note: `Bulk reviewed from ${status} timeline view`,
+      }),
+    });
+    state.timeline = { ...result, status };
+    renderTimeline();
+    await loadHealth();
+    toast(`Marked ${result.reviewed_count || 0} fact(s) as reviewed.`);
+  } catch (error) {
+    toast(error.message, "error");
+  } finally {
+    setButtonLoading(els.markTimelineReadBtn, false);
+  }
+}
+
+async function markFactReviewed(factId) {
+  try {
+    const result = await apiFetch(`/api/v1/wiki/facts/${factId}/review`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ review_note: "Reviewed from timeline" }),
+    });
+    state.timeline = { ...result, status: state.timeline.status };
+    renderTimeline();
+    await loadHealth();
+    toast("Fact marked reviewed.");
+  } catch (error) {
+    toast(error.message, "error");
+  }
+}
+
+async function loadNotifications() {
+  try {
+    state.notifications = await apiFetch(API.notifications);
+  } catch {
+    state.notifications = { items: [], unread_count: 0 };
+  }
+  renderNotifications();
+}
+
+function renderNotifications() {
+  if (!els.notificationBadge) return;
+  const unread = state.notifications.unread_count || 0;
+  els.notificationBadge.hidden = unread === 0;
+  els.notificationBadge.textContent = String(unread);
+  els.notificationList.innerHTML = "";
+  const items = state.notifications.items || [];
+  els.emptyNotifications.hidden = items.length > 0;
+  for (const item of items) {
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = `notification-item ${item.read_at ? "read" : "unread"}`;
+    row.innerHTML = `<strong>${escapeHtml(item.title)}</strong><span>${escapeHtml(item.body || "")}</span>`;
+    row.addEventListener("click", async () => {
+      await markNotificationRead(item.id);
+      if (item.target_type === "digest") await openDigest(item.target_id);
+    });
+    els.notificationList.appendChild(row);
+  }
+}
+
+async function markNotificationRead(id) {
+  try {
+    await apiFetch(`${API.notifications}/${id}/read`, { method: "PATCH" });
+    await loadNotifications();
+  } catch (error) {
+    toast(error.message, "error");
+  }
+}
+
+async function generateDigest() {
+  setButtonLoading(els.generateDigestBtn, true, "…");
+  try {
+    state.digest = await apiFetch(`${API.digests}/generate`, { method: "POST", timeout: 90000 });
+    renderDigest();
+    els.digestModal.hidden = false;
+    document.body.classList.add("modal-open");
+    await loadNotifications();
+  } catch (error) {
+    toast(error.message, "error");
+  } finally {
+    setButtonLoading(els.generateDigestBtn, false);
+  }
+}
+
+async function openDigest() {
+  try {
+    state.digest = await apiFetch(`${API.digests}/latest`);
+    if (!state.digest) state.digest = await apiFetch(`${API.digests}/generate`, { method: "POST", timeout: 90000 });
+    renderDigest();
+    els.digestModal.hidden = false;
+    document.body.classList.add("modal-open");
+  } catch (error) {
+    toast(error.message, "error");
+  }
+}
+
+function renderDigest() {
+  const content = state.digest?.content || {};
+  const section = (title, rows, render) => `
+    <section class="digest-section"><h3>${escapeHtml(title)}</h3>
+      ${rows && rows.length ? rows.slice(0, 8).map(render).join("") : `<p class="empty-mini">Nothing here today.</p>`}
+    </section>`;
+  els.digestBody.innerHTML = `
+    <div class="digest-insight">${escapeHtml(content.insight_of_the_day || "Your digest is ready.")}</div>
+    ${section("Expiring Facts", content.expiring_facts || [], (f) => `<button class="digest-row" data-slug="${escapeHtml(f.page_slug || "")}"><strong>${escapeHtml(f.subject || "Fact")}</strong><span>${escapeHtml(f.object_val || f.predicate || "")}</span></button>`)}
+    ${section("Conflicts", content.new_conflicts || [], (c) => `<button class="digest-row" data-slug="${escapeHtml(c.slug_a || "")}"><strong>${escapeHtml(c.topic || "Conflict")}</strong><span>${escapeHtml(c.severity || "medium")}</span></button>`)}
+    ${section("Changed Pages", content.changed_pages || [], (p) => `<button class="digest-row" data-slug="${escapeHtml(p.slug || "")}"><strong>${escapeHtml(p.title || p.slug || "Page")}</strong><span>${escapeHtml(p.updated_at || "")}</span></button>`)}
+    ${section("Suggested Re-reads", content.suggested_review_pages || [], (p) => `<button class="digest-row" data-slug="${escapeHtml(p.slug || "")}"><strong>${escapeHtml(p.title || p.slug || "Page")}</strong><span>${escapeHtml(p.reason || "")}</span></button>`)}
+  `;
+  els.digestBody.querySelectorAll(".digest-row").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const slug = btn.dataset.slug;
+      if (slug) openWikiInsight(slug);
+    });
+  });
+  renderKnowledgeDigestPreview();
+}
+
+function renderKnowledgeDigestPreview() {
+  if (!els.knowledgeDigestPreview) return;
+  const content = state.digest?.content;
+  if (!content) {
+    els.knowledgeDigestPreview.innerHTML = `<p class="empty-mini">Generate a digest to see the day’s priorities.</p>`;
+    return;
+  }
+  const rows = [
+    ...(content.expiring_facts || []).slice(0, 2).map((item) => ({ label: item.subject || "Expiring fact", detail: item.object_val || item.predicate || "Needs review", slug: item.page_slug })),
+    ...(content.new_conflicts || []).slice(0, 2).map((item) => ({ label: item.topic || "Conflict", detail: item.severity || "open", slug: item.slug_a })),
+    ...(content.changed_pages || []).slice(0, 2).map((item) => ({ label: item.title || item.slug, detail: "Changed recently", slug: item.slug })),
+  ];
+  els.knowledgeDigestPreview.innerHTML = rows.length
+    ? rows.slice(0, 4).map((row) => `<button class="digest-row" type="button" data-slug="${escapeHtml(row.slug || "")}"><strong>${escapeHtml(row.label)}</strong><span>${escapeHtml(row.detail)}</span></button>`).join("")
+    : `<p class="empty-mini">Nothing urgent in today’s digest.</p>`;
+  els.knowledgeDigestPreview.querySelectorAll("[data-slug]").forEach((btn) => {
+    btn.addEventListener("click", () => btn.dataset.slug && openWikiInsight(btn.dataset.slug));
+  });
+}
+
+async function loadFlashcardStats() {
+  try {
+    state.flashcards.stats = await apiFetch(`${API.flashcards}/stats`);
+  } catch {
+    state.flashcards.stats = null;
+  }
+  renderFlashcardBadge();
+}
+
+function renderFlashcardBadge() {
+  const due = state.flashcards.stats?.due_today || 0;
+  if (els.flashcardDueBadge) els.flashcardDueBadge.textContent = String(due);
+  if (els.pulseDueCount) els.pulseDueCount.textContent = String(due);
+  if (els.knowledgeDueCount) els.knowledgeDueCount.textContent = String(due);
+}
+
+async function openFlashcards() {
+  els.flashcardModal.hidden = false;
+  document.body.classList.add("modal-open");
+  els.flashcardStatsText.textContent = "Loading review queue...";
+  els.flashcardBody.innerHTML = `<div class="flashcard-loading"><span class="thinking-spinner"></span><strong>Preparing your review queue</strong><small>This does not call an AI model.</small></div>`;
+  try {
+    const [due, stats] = await Promise.all([
+      apiFetch(`${API.flashcards}/due`, { timeout: 12000 }),
+      apiFetch(`${API.flashcards}/stats`, { timeout: 12000 }),
+    ]);
+    state.flashcards = { due, stats, currentIndex: 0, showingAnswer: false };
+    renderFlashcards();
+  } catch (error) {
+    state.flashcards = { due: [], stats: state.flashcards.stats, currentIndex: 0, showingAnswer: false };
+    els.flashcardStatsText.textContent = "Review queue unavailable";
+    els.flashcardBody.innerHTML = `<div class="flashcard-error"><strong>Could not load review cards.</strong><span>${escapeHtml(error.message || "Please try again.")}</span><button type="button" class="secondary-button" id="retryFlashcardsBtn">Retry</button></div>`;
+    els.flashcardBody.querySelector("#retryFlashcardsBtn")?.addEventListener("click", openFlashcards);
+  }
+}
+
+function renderFlashcards() {
+  const stats = state.flashcards.stats || {};
+  const totalDue = state.flashcards.due.length;
+  const index = state.flashcards.currentIndex;
+  const progressText = totalDue ? `${Math.min(index + 1, totalDue)} of ${totalDue}` : "0 of 0";
+  els.flashcardStatsText.innerHTML = `
+    <strong>${stats.due_today || 0}</strong> due
+    <span>${stats.total_cards || 0} total</span>
+    <span>${stats.mastery_percent || 0}% mastery</span>
+  `;
+  const card = state.flashcards.due[index];
+  if (!card) {
+    els.flashcardBody.innerHTML = `
+      <div class="flashcard-empty-state">
+        <strong>No cards due right now</strong>
+        <span>Generate cards from your wiki or come back when the next review is due.</span>
+        <div class="flashcard-empty-actions">
+          <button type="button" class="secondary-button" id="emptyGenerateCardsBtn">Generate Cards</button>
+          <button type="button" class="primary-button" id="emptyCloseReviewBtn">Done</button>
+        </div>
+      </div>
+    `;
+    els.flashcardBody.querySelector("#emptyGenerateCardsBtn")?.addEventListener("click", generateFlashcards);
+    els.flashcardBody.querySelector("#emptyCloseReviewBtn")?.addEventListener("click", () => {
+      els.flashcardModal.hidden = true;
+      document.body.classList.remove("modal-open");
+    });
+    return;
+  }
+  const pct = totalDue ? Math.round((index / totalDue) * 100) : 0;
+  els.flashcardBody.innerHTML = `
+    <div class="study-session-shell">
+      <div class="study-progress-row">
+        <span>${escapeHtml(progressText)}</span>
+        <div class="study-progress-track"><i style="width:${pct}%"></i></div>
+        <button type="button" class="text-button flashcard-source-btn">Source</button>
+      </div>
+      <article class="study-card ${state.flashcards.showingAnswer ? "show-answer" : ""}">
+        <div class="study-card-kicker">${state.flashcards.showingAnswer ? "Answer" : "Question"}</div>
+        <h2>${escapeHtml(state.flashcards.showingAnswer ? card.answer : card.question)}</h2>
+        <p>${escapeHtml(state.flashcards.showingAnswer ? (card.source_quote || "Review the linked source page for more context.") : "Try to answer from memory, then reveal the answer.")}</p>
+      </article>
+      ${state.flashcards.showingAnswer ? `
+        <div class="study-review-panel">
+          <button type="button" data-result="again" class="study-rating again"><strong>Again</strong><span>I missed it</span></button>
+          <button type="button" data-result="hard" class="study-rating hard"><strong>Hard</strong><span>I partly knew it</span></button>
+          <button type="button" data-result="easy" class="study-rating easy"><strong>Easy</strong><span>I knew it</span></button>
+        </div>
+      ` : `
+        <div class="study-reveal-panel">
+          <button type="button" class="primary-button" id="revealFlashcardBtn">Reveal Answer</button>
+        </div>
+      `}
+    </div>
+  `;
+  els.flashcardBody.querySelector("#revealFlashcardBtn")?.addEventListener("click", () => {
+    state.flashcards.showingAnswer = true;
+    renderFlashcards();
+  });
+  els.flashcardBody.querySelector(".flashcard-source-btn")?.addEventListener("click", () => {
+    if (card.page_slug) openWikiInsight(card.page_slug);
+  });
+  els.flashcardBody.querySelectorAll("[data-result]").forEach((btn) => {
+    btn.addEventListener("click", () => reviewFlashcard(card.id, btn.dataset.result));
+  });
+}
+
+async function generateFlashcards() {
+  setButtonLoading(els.generateFlashcardsBtn, true, "Generating...");
+  try {
+    const result = await apiFetch(`${API.flashcards}/generate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      timeout: 20000,
+      body: JSON.stringify({ page_slugs: [] }),
+    });
+    toast(`Generated ${result.created} flashcard(s)${result.limited ? " from the first 30 pages" : ""}.`);
+    await openFlashcards();
+  } catch (error) {
+    toast(error.message, "error");
+  } finally {
+    setButtonLoading(els.generateFlashcardsBtn, false);
+  }
+}
+
+async function reviewFlashcard(cardId, result) {
+  if (state.flashcards.reviewing) return;
+  state.flashcards.reviewing = true;
+  const currentIndex = state.flashcards.currentIndex;
+  const actionButtons = els.flashcardBody.querySelectorAll("[data-result]");
+  actionButtons.forEach((btn) => {
+    btn.disabled = true;
+    btn.classList.add("loading");
+  });
+  try {
+    await apiFetch(`${API.flashcards}/${cardId}/review`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      timeout: 10000,
+      body: JSON.stringify({ result }),
+    });
+    state.flashcards.currentIndex = currentIndex + 1;
+    state.flashcards.showingAnswer = false;
+    renderFlashcards();
+    loadFlashcardStats().catch(() => {});
+  } catch (error) {
+    state.flashcards.currentIndex = currentIndex;
+    state.flashcards.showingAnswer = true;
+    renderFlashcards();
+    toast(error.message || "Could not save review. Please retry.", "error");
+  } finally {
+    state.flashcards.reviewing = false;
+  }
+}
+
 function toggleWikiMenu(slug) {
   state.openWikiMenuSlug = state.openWikiMenuSlug === slug ? null : slug;
   renderWikiPages();
@@ -1294,6 +1821,7 @@ async function applyWikiRename(slug) {
     state.editingWikiSlug = null;
     state.editingWikiTitle = "";
     await loadWikiPages();
+    await loadTier4();
   } catch (error) {
     toast(error.message, "error");
   }
@@ -1315,6 +1843,7 @@ function confirmDeleteWikiPage(slug) {
         state.editingWikiTitle = "";
         state.openWikiMenuSlug = null;
         await loadWikiPages();
+        await loadTier4();
       } catch (error) {
         toast(error.message, "error");
       }
@@ -1470,7 +1999,7 @@ function renderWikiPages() {
         try { input?.select(); } catch (e) {}
       }, 0);
     } else {
-      item.querySelector(".wiki-card-row").addEventListener("click", () => prefillWikiPrompt(page));
+      item.querySelector(".wiki-card-row").addEventListener("click", () => openWikiInsight(page.slug));
       item.querySelector(".wiki-menu-btn").addEventListener("click", (event) => {
         event.stopPropagation();
         toggleWikiMenu(page.slug);
@@ -1515,6 +2044,7 @@ async function uploadPdf(file) {
     await loadConflicts();
     els.uploadState.textContent = "Ready";
     await loadWikiPages();
+    await loadTier4();
   } catch (error) {
     showUploadError(error.message);
     els.uploadState.textContent = "Failed";
@@ -1573,6 +2103,7 @@ function bindEvents() {
       state.user = response.user;
       showApp(true);
       await Promise.all([loadWikiPages(), loadSessions(), loadConflicts()]);
+      loadTier4().catch((error) => console.warn("Tier 4 failed after login", error));
       renderChat();
     } catch (error) {
       showAuthError(error.message);
@@ -1670,8 +2201,53 @@ function bindEvents() {
   els.refreshWikiBtn.addEventListener("click", async () => {
     await loadWikiPages();
     await loadConflicts();
+    await loadTier4();
   });
   els.scanConflictsBtn?.addEventListener("click", scanConflicts);
+  document.querySelectorAll("[data-wiki-view]").forEach((btn) => {
+    btn.addEventListener("click", () => setWikiView(btn.dataset.wikiView || "overview"));
+  });
+  els.pulseReviewBtn?.addEventListener("click", openFlashcards);
+  document.querySelectorAll(".timeline-filter").forEach((btn) => {
+    btn.addEventListener("click", () => loadTimeline(btn.dataset.status || "all"));
+  });
+  els.refreshTimelineBtn?.addEventListener("click", () => loadTimeline(state.timeline.status || "all"));
+  els.markTimelineReadBtn?.addEventListener("click", markVisibleTimelineReviewed);
+  els.notificationBellBtn?.addEventListener("click", (event) => {
+    event.stopPropagation();
+    els.notificationPopover.hidden = !els.notificationPopover.hidden;
+    if (!els.notificationPopover.hidden) loadNotifications();
+  });
+  els.notificationPopover?.addEventListener("click", (event) => event.stopPropagation());
+  els.generateDigestBtn?.addEventListener("click", generateDigest);
+  els.knowledgeDigestBtn?.addEventListener("click", generateDigest);
+  els.knowledgeOpenDigestBtn?.addEventListener("click", openDigest);
+  els.knowledgeReviewBtn?.addEventListener("click", openFlashcards);
+  els.knowledgeDueCardBtn?.addEventListener("click", openFlashcards);
+  els.knowledgeGenerateCardsBtn?.addEventListener("click", generateFlashcards);
+  els.knowledgeStartReviewBtn?.addEventListener("click", openFlashcards);
+  els.digestCloseBtn?.addEventListener("click", () => {
+    els.digestModal.hidden = true;
+    document.body.classList.remove("modal-open");
+  });
+  els.digestModal?.addEventListener("click", (event) => {
+    if (event.target === els.digestModal) {
+      els.digestModal.hidden = true;
+      document.body.classList.remove("modal-open");
+    }
+  });
+  els.reviewFlashcardsBtn?.addEventListener("click", openFlashcards);
+  els.flashcardCloseBtn?.addEventListener("click", () => {
+    els.flashcardModal.hidden = true;
+    document.body.classList.remove("modal-open");
+  });
+  els.flashcardModal?.addEventListener("click", (event) => {
+    if (event.target === els.flashcardModal) {
+      els.flashcardModal.hidden = true;
+      document.body.classList.remove("modal-open");
+    }
+  });
+  els.generateFlashcardsBtn?.addEventListener("click", generateFlashcards);
   els.wikiInsightCloseBtn?.addEventListener("click", closeWikiInsight);
   els.wikiInsightModal?.addEventListener("click", (event) => {
     if (event.target === els.wikiInsightModal) closeWikiInsight();
@@ -1704,6 +2280,8 @@ function bindEvents() {
   window.addEventListener("keydown", (event) => {
     if (event.key !== "Escape") return;
     if (!els.wikiInsightModal.hidden) closeWikiInsight();
+    if (els.digestModal && !els.digestModal.hidden) els.digestModal.hidden = true;
+    if (els.flashcardModal && !els.flashcardModal.hidden) els.flashcardModal.hidden = true;
     if (!els.llmModal.hidden) closeLlmModal();
   });
 
@@ -1825,6 +2403,7 @@ function bindEvents() {
     }
     if (rerenderSessions) renderSessionList();
     if (rerenderWiki) renderWikiPages();
+    if (els.notificationPopover && !els.notificationPopover.hidden) els.notificationPopover.hidden = true;
   });
 }
 
@@ -2349,18 +2928,21 @@ loadWorkspaces();
 (function initResearchIntelligence() {
   const researchState = {
     papers: [],
+    summary: null,
     selectedPaperIds: new Set(),
     activeSubtab: "details",
-    activePaperId: null
+    activePaperId: null,
+    activePaperDetails: null,
+    lastComparison: null,
+    lastGaps: null
   };
 
-  // Add research API endpoints
   API.researchPapers = "/api/v1/research/papers";
+  API.researchSummary = "/api/v1/research/summary";
   API.researchGraph = "/api/v1/research/graph";
   API.researchCompare = "/api/v1/research/compare";
   API.researchGaps = "/api/v1/research/gaps";
 
-  // Elements mapping
   const elements = {
     researchList: document.querySelector("#researchList"),
     emptyResearch: document.querySelector("#emptyResearch"),
@@ -2368,6 +2950,11 @@ loadWorkspaces();
     researchGraphBtn: document.querySelector("#researchGraphBtn"),
     researchCompareBtn: document.querySelector("#researchCompareBtn"),
     researchGapsBtn: document.querySelector("#researchGapsBtn"),
+    researchBoardGraphBtn: document.querySelector("#researchBoardGraphBtn"),
+    researchBoardCompareBtn: document.querySelector("#researchBoardCompareBtn"),
+    researchBoardGapsBtn: document.querySelector("#researchBoardGapsBtn"),
+    researchOpenDetailsBtn: document.querySelector("#researchOpenDetailsBtn"),
+    researchClearSelectionBtn: document.querySelector("#researchClearSelectionBtn"),
     researchModal: document.querySelector("#researchModal"),
     researchModalCloseBtn: document.querySelector("#researchModalCloseBtn"),
     paperDetailsContent: document.querySelector("#paperDetailsContent"),
@@ -2379,7 +2966,20 @@ loadWorkspaces();
     subtabs: document.querySelectorAll(".research-sub-tab"),
     researchUploadArea: document.querySelector("#researchUploadArea"),
     researchPdfInput: document.querySelector("#researchPdfInput"),
-    researchUploadState: document.querySelector("#researchUploadState"),
+    researchUploadDefault: document.querySelector("#researchUploadDefault"),
+    researchUploadActive: document.querySelector("#researchUploadActive"),
+    researchUploadMessage: document.querySelector("#researchUploadMessage"),
+    researchFocusContent: document.querySelector("#researchFocusContent"),
+    researchSelectionList: document.querySelector("#researchSelectionList"),
+    researchMapPreview: document.querySelector("#researchMapPreview"),
+    researchStudioInsight: document.querySelector("#researchStudioInsight"),
+    researchSelectedCount: document.querySelector("#researchSelectedCount"),
+    researchAnalyzedCount: document.querySelector("#researchAnalyzedCount"),
+    researchProcessingCount: document.querySelector("#researchProcessingCount"),
+    researchTotalCount: document.querySelector("#researchTotalCount"),
+    researchReadyCount: document.querySelector("#researchReadyCount"),
+    researchClaimCount: document.querySelector("#researchClaimCount"),
+    researchMethodCount: document.querySelector("#researchMethodCount"),
     panels: {
       details: document.querySelector("#researchDetailsPanel"),
       graph: document.querySelector("#researchGraphPanel"),
@@ -2388,10 +2988,27 @@ loadWorkspaces();
     }
   };
 
-  // Export to global scope so index.html's tab switcher can refresh research list
   window.refreshResearchPapers = loadResearchPapers;
 
   let pollInterval = null;
+
+  function statusLabel(status) {
+    if (status === "failed") return "Failed";
+    if (status === "completed" || status === "done") return "Ready";
+    return "Processing";
+  }
+
+  function isReady(paper) {
+    return paper.status === "completed" || paper.status === "done";
+  }
+
+  function selectedPapers() {
+    return researchState.papers.filter((paper) => researchState.selectedPaperIds.has(paper.id));
+  }
+
+  function setText(el, value) {
+    if (el) el.textContent = String(value);
+  }
 
   async function loadResearchPapers() {
     if (!state.token) {
@@ -2399,40 +3016,47 @@ loadWorkspaces();
       return;
     }
     if (!elements.researchList) return;
-    
-    // If we're already rendering items, do not show "Loading..." to avoid jarring flashes during background poll
-    const isFirstLoad = elements.researchList.innerHTML === "" || 
-                        elements.researchList.querySelector(".empty-mini") !== null ||
-                        elements.researchList.querySelector(".inline-error") !== null;
-                        
+
+    const isFirstLoad = elements.researchList.innerHTML === "" ||
+      elements.researchList.querySelector(".empty-mini") ||
+      elements.researchList.querySelector(".inline-error");
+
     if (isFirstLoad) {
       elements.researchList.innerHTML = `<p class="empty-mini">Loading papers…</p>`;
     }
-    
-    try {
-      const response = await apiFetch(API.researchPapers);
-      researchState.papers = response || [];
-      renderResearchPapers();
 
-      // Poll background status every 5s if there is any active pending/processing papers
-      const hasProcessing = researchState.papers.some(p => p.status === "pending" || p.status === "processing");
-      if (hasProcessing) {
-        startPolling();
-      } else {
-        stopPolling();
+    try {
+      const [papers, summary] = await Promise.all([
+        apiFetch(API.researchPapers),
+        apiFetch(API.researchSummary).catch(() => null)
+      ]);
+      researchState.papers = papers || [];
+      researchState.summary = summary;
+      researchState.selectedPaperIds.forEach((id) => {
+        if (!researchState.papers.some((paper) => paper.id === id)) researchState.selectedPaperIds.delete(id);
+      });
+      if (!researchState.activePaperId && researchState.papers.length) {
+        const firstReady = researchState.papers.find(isReady) || researchState.papers[0];
+        researchState.activePaperId = firstReady.id;
       }
+      renderResearchPapers();
+      renderResearchDashboard();
+      renderGraphPreview();
+      if (researchState.activePaperId && (!researchState.activePaperDetails || researchState.activePaperDetails.id !== researchState.activePaperId)) {
+        await loadPaperDetails(researchState.activePaperId, { openModal: false });
+      }
+
+      const hasProcessing = researchState.papers.some((p) => p.status === "pending" || p.status === "processing");
+      hasProcessing ? startPolling() : stopPolling();
     } catch (e) {
-      if (isFirstLoad) {
-        elements.researchList.innerHTML = `<p class="inline-error">${escapeHtml(e.message)}</p>`;
-      }
+      if (isFirstLoad) elements.researchList.innerHTML = `<p class="inline-error">${escapeHtml(e.message)}</p>`;
+      renderResearchDashboard();
     }
   }
 
   function startPolling() {
     if (pollInterval) return;
-    pollInterval = setInterval(() => {
-      loadResearchPapers();
-    }, 5000);
+    pollInterval = setInterval(loadResearchPapers, 5000);
   }
 
   function stopPolling() {
@@ -2446,68 +3070,59 @@ loadWorkspaces();
     if (!elements.researchList) return;
     elements.researchList.innerHTML = "";
     const hasPapers = researchState.papers.length > 0;
-    elements.emptyResearch.hidden = hasPapers;
+    if (elements.emptyResearch) elements.emptyResearch.hidden = hasPapers;
     if (!hasPapers) return;
 
     researchState.papers.forEach((paper) => {
       const item = document.createElement("div");
       const isSelected = researchState.selectedPaperIds.has(paper.id);
       const isActive = researchState.activePaperId === paper.id;
-      item.className = `paper-item ${isActive ? "active" : ""}`;
-      
-      const authorsList = paper.authors && paper.authors.length 
+      const authorsList = paper.authors && paper.authors.length
         ? paper.authors.slice(0, 2).join(", ") + (paper.authors.length > 2 ? " et al." : "")
-        : "Unknown Authors";
-      
-      const statusPill = paper.status === "failed" 
-        ? `<span class="wiki-badge warn" title="${escapeHtml(paper.error_message || '')}">Failed</span>`
-        : (paper.status === "completed" || paper.status === "done")
-        ? `<span class="wiki-badge" style="background:#2ecc71; color:white; border-color:#27ae60;">Analyzed</span>`
-        : `<span class="wiki-badge muted">Processing</span>`;
+        : "Unknown authors";
+      const pillClass = paper.status === "failed" ? "warn" : isReady(paper) ? "" : "muted";
 
+      item.className = `paper-item ${isActive ? "active" : ""}`;
       item.innerHTML = `
-        <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 8px;">
-          <strong class="paper-title" style="flex: 1; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; line-height: 1.3;">${escapeHtml(paper.title)}</strong>
-          <div style="display: flex; align-items: center; gap: 8px; flex-shrink: 0; margin-top: 2px;">
-            <input type="checkbox" class="paper-select-checkbox" data-id="${paper.id}" ${isSelected ? "checked" : ""} style="cursor: pointer; margin: 0;" />
-            <button class="paper-delete-btn" data-id="${paper.id}" title="Delete paper" style="background: none; border: none; padding: 2px; cursor: pointer; color: var(--muted); font-size: 12px; font-weight: bold; line-height: 1; transition: color 0.2s; display: flex; align-items: center; justify-content: center; height: 16px; width: 16px;">✕</button>
+        <div class="paper-card-top">
+          <strong class="paper-title">${escapeHtml(paper.title)}</strong>
+          <div class="paper-card-actions">
+            <input type="checkbox" class="paper-select-checkbox" data-id="${paper.id}" ${isSelected ? "checked" : ""} title="Select for comparison" />
+            <button class="paper-delete-btn" data-id="${paper.id}" title="Delete paper" type="button">✕</button>
           </div>
         </div>
-        <div style="font-size: 11px; color: var(--muted); margin-bottom: 6px; margin-top: 4px;">${escapeHtml(authorsList)}</div>
+        <div class="paper-authors">${escapeHtml(authorsList)}</div>
         <div class="paper-meta">
-          <span>${escapeHtml(paper.venue || "No Venue")}</span>
-          <span>•</span>
-          <span>${escapeHtml(paper.publication_year ? String(paper.publication_year) : "N/A")}</span>
-          <span>•</span>
-          ${statusPill}
+          <span>${escapeHtml(paper.venue || "No venue")}</span>
+          <span>${escapeHtml(paper.publication_year ? String(paper.publication_year) : "Year unknown")}</span>
+          <span class="wiki-badge ${pillClass}" title="${escapeHtml(paper.error_message || "")}">${statusLabel(paper.status)}</span>
+        </div>
+        <div class="paper-counts">
+          <span class="paper-count-pill">${paper.method_count || 0} methods</span>
+          <span class="paper-count-pill">${paper.claim_count || 0} claims</span>
+          <span class="paper-count-pill">${paper.section_count || 0} sections</span>
         </div>
       `;
 
-      // Select checkbox behavior
       const checkbox = item.querySelector(".paper-select-checkbox");
       checkbox.addEventListener("click", (e) => {
         e.stopPropagation();
-        if (checkbox.checked) {
-          researchState.selectedPaperIds.add(paper.id);
-        } else {
-          researchState.selectedPaperIds.delete(paper.id);
-        }
+        if (checkbox.checked) researchState.selectedPaperIds.add(paper.id);
+        else researchState.selectedPaperIds.delete(paper.id);
+        renderResearchPapers();
+        renderResearchDashboard();
       });
 
-      // Delete button behavior
-      const deleteBtn = item.querySelector(".paper-delete-btn");
-      deleteBtn.addEventListener("click", async (e) => {
+      item.querySelector(".paper-delete-btn").addEventListener("click", async (e) => {
         e.stopPropagation();
-        if (!confirm(`Are you sure you want to delete "${paper.title}"?`)) {
-          return;
-        }
+        if (!confirm(`Delete "${paper.title}" from the research library?`)) return;
         try {
           await apiFetch(`${API.researchPapers}/${paper.id}`, { method: "DELETE" });
           toast(`Deleted paper: ${paper.title}`);
           researchState.selectedPaperIds.delete(paper.id);
           if (researchState.activePaperId === paper.id) {
             researchState.activePaperId = null;
-            elements.paperDetailsContent.innerHTML = `<p class="empty-mini">Select a research paper from the sidebar list to analyze details.</p>`;
+            researchState.activePaperDetails = null;
           }
           await loadResearchPapers();
         } catch (err) {
@@ -2515,124 +3130,151 @@ loadWorkspaces();
         }
       });
 
-      // View paper details
-      item.addEventListener("click", () => {
+      item.addEventListener("click", async () => {
         researchState.activePaperId = paper.id;
         renderResearchPapers();
-        openResearchModal("details");
-        loadPaperDetails(paper.id);
+        await loadPaperDetails(paper.id, { openModal: false });
       });
 
       elements.researchList.appendChild(item);
     });
   }
 
-  async function loadPaperDetails(paperId) {
-    elements.paperDetailsContent.innerHTML = `<p class="empty-mini">Loading paper details…</p>`;
+  function renderResearchDashboard() {
+    const summary = researchState.summary || {};
+    const total = summary.total_papers ?? researchState.papers.length;
+    const ready = summary.analyzed_papers ?? researchState.papers.filter(isReady).length;
+    const processing = summary.processing_papers ?? researchState.papers.filter((p) => p.status === "pending" || p.status === "processing").length;
+    const failed = summary.failed_papers ?? researchState.papers.filter((p) => p.status === "failed").length;
+    const claims = summary.claim_count ?? researchState.papers.reduce((sum, p) => sum + (p.claim_count || 0), 0);
+    const methods = summary.method_count ?? researchState.papers.reduce((sum, p) => sum + (p.method_count || 0), 0);
+    const selected = researchState.selectedPaperIds.size;
+
+    setText(elements.researchSelectedCount, selected);
+    setText(elements.researchAnalyzedCount, ready);
+    setText(elements.researchProcessingCount, processing);
+    setText(elements.researchTotalCount, total);
+    setText(elements.researchReadyCount, ready);
+    setText(elements.researchClaimCount, claims);
+    setText(elements.researchMethodCount, methods);
+
+    if (elements.researchStudioInsight) {
+      if (!total) elements.researchStudioInsight.textContent = "Upload papers to extract abstracts, methods, claims, datasets, and contradictions.";
+      else if (processing) elements.researchStudioInsight.textContent = `${processing} paper${processing === 1 ? " is" : "s are"} still processing. Ready papers can already be compared.`;
+      else if (failed) elements.researchStudioInsight.textContent = `${failed} paper${failed === 1 ? " needs" : "s need"} attention, but the rest of your library is usable.`;
+      else elements.researchStudioInsight.textContent = `${ready} analyzed paper${ready === 1 ? "" : "s"}, ${claims} claims, and ${methods} methods are ready for synthesis.`;
+    }
+
+    renderSelectionList();
+    const activeDetails = researchState.activePaperDetails;
+    if (activeDetails) renderPaperFocus(activeDetails);
+    else renderPaperFocusPlaceholder();
+  }
+
+  function renderSelectionList() {
+    if (!elements.researchSelectionList) return;
+    const selected = selectedPapers();
+    if (!selected.length) {
+      elements.researchSelectionList.innerHTML = `<p class="empty-mini">Select papers in the sidebar to make a comparison set.</p>`;
+      return;
+    }
+    elements.researchSelectionList.innerHTML = selected.map((paper) => `
+      <div class="research-selection-item">
+        <strong>${escapeHtml(paper.title)}</strong>
+        <div class="paper-meta"><span>${escapeHtml(paper.publication_year ? String(paper.publication_year) : "Year unknown")}</span><span>${paper.method_count || 0} methods</span><span>${paper.claim_count || 0} claims</span></div>
+      </div>
+    `).join("");
+  }
+
+  function renderPaperFocusPlaceholder() {
+    if (!elements.researchFocusContent) return;
+    if (!researchState.papers.length) {
+      elements.researchFocusContent.innerHTML = `<p class="empty-mini">Upload research PDFs to start a literature workspace.</p>`;
+    } else {
+      elements.researchFocusContent.innerHTML = `<p class="empty-mini">Choose a paper from the library to see its abstract, methods, and strongest claims.</p>`;
+    }
+  }
+
+  function renderPaperFocus(paper) {
+    if (!elements.researchFocusContent) return;
+    const authors = paper.authors && paper.authors.length ? paper.authors.join(", ") : "Unknown authors";
+    const methods = (paper.methods || []).slice(0, 4);
+    const claims = (paper.claims || []).slice(0, 5);
+    elements.researchFocusContent.innerHTML = `
+      <div class="research-focus-hero">
+        <div>
+          <h3>${escapeHtml(paper.title)}</h3>
+          <div class="research-focus-meta"><span>${escapeHtml(authors)}</span><span>${escapeHtml(paper.venue || "No venue")}</span><span>${escapeHtml(paper.publication_year ? String(paper.publication_year) : "Year unknown")}</span></div>
+        </div>
+        <div class="research-abstract-box">${escapeHtml(paper.abstract || "No abstract extracted yet.")}</div>
+        <div class="research-mini-grid">
+          <div class="research-mini-section">
+            <h4>Methods</h4>
+            <div class="research-mini-list">${methods.length ? methods.map((m) => `<div class="research-mini-item"><strong>${escapeHtml(m.name)}</strong><br>${escapeHtml(m.description || "No description extracted.")}</div>`).join("") : `<p class="empty-mini">No methods extracted yet.</p>`}</div>
+          </div>
+          <div class="research-mini-section">
+            <h4>Claims</h4>
+            <div class="research-mini-list">${claims.length ? claims.map((c) => `<div class="research-mini-item"><span class="research-claim-tag ${escapeHtml(c.category || "finding")}">${escapeHtml(c.category || "finding")}</span><br>${escapeHtml(c.claim_text)}</div>`).join("") : `<p class="empty-mini">No claims extracted yet.</p>`}</div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  async function loadPaperDetails(paperId, opts = {}) {
+    if (elements.paperDetailsContent) elements.paperDetailsContent.innerHTML = `<p class="empty-mini">Loading paper details…</p>`;
     try {
       const details = await apiFetch(`${API.researchPapers}/${paperId}`);
-      if (details.error) {
-        elements.paperDetailsContent.innerHTML = `<p class="inline-error">${escapeHtml(details.error)}</p>`;
-        return;
-      }
+      researchState.activePaperDetails = details;
       renderPaperDetails(details);
+      renderPaperFocus(details);
+      if (opts.openModal) openResearchModal("details");
     } catch (e) {
-      elements.paperDetailsContent.innerHTML = `<p class="inline-error">${escapeHtml(e.message)}</p>`;
+      const msg = `<p class="inline-error">${escapeHtml(e.message)}</p>`;
+      if (elements.paperDetailsContent) elements.paperDetailsContent.innerHTML = msg;
+      if (elements.researchFocusContent) elements.researchFocusContent.innerHTML = msg;
     }
   }
 
   function renderPaperDetails(paper) {
-    const authors = paper.authors && paper.authors.length ? paper.authors.join(", ") : "Unknown Authors";
-    const abstract = paper.abstract || "No abstract extracted.";
-    
-    // Render Sections
+    if (!elements.paperDetailsContent) return;
+    const authors = paper.authors && paper.authors.length ? paper.authors.join(", ") : "Unknown authors";
     const sectionsHtml = paper.sections && paper.sections.length
-      ? paper.sections.map(s => `
-          <div class="research-section-box" style="margin-bottom: 16px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); overflow: hidden;">
-            <h5 style="font-size: 12.5px; font-weight: 700; color: var(--ink); margin: 0; padding: 10px 14px; background: var(--bg-hover); border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center;">
-              <span>${escapeHtml(s.heading)}</span>
-              <span style="font-size: 9px; font-weight: 600; color: var(--muted); text-transform: uppercase; background: var(--line); padding: 2px 6px; border-radius: 4px; letter-spacing: 0.5px;">${escapeHtml(s.section_type)}</span>
-            </h5>
-            <div style="font-size: 13px; color: var(--text); line-height: 1.6; padding: 14px; white-space: pre-line; max-height: 400px; overflow-y: auto; font-family: var(--font-serif); text-align: justify; background: #faf9f6;">
-              ${escapeHtml(s.content)}
-            </div>
+      ? paper.sections.map((s) => `
+          <div class="research-section-box">
+            <div class="research-section-head"><strong>${escapeHtml(s.heading)}</strong><span class="wiki-badge muted">${escapeHtml(s.section_type || "section")}</span></div>
+            <div class="research-section-content">${escapeHtml(s.content)}</div>
           </div>
         `).join("")
-      : `<p class="muted-text" style="font-size: 12px;">No structural sections parsed.</p>`;
+      : `<p class="empty-mini">No structural sections parsed.</p>`;
 
-    // Render Methods
     const methodsHtml = paper.methods && paper.methods.length
-      ? `<table class="research-table">
-          <thead>
-            <tr>
-              <th>Method/Model</th>
-              <th>Description</th>
-              <th>Evaluation Dataset</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${paper.methods.map(m => `
-              <tr>
-                <td><strong>${escapeHtml(m.name)}</strong></td>
-                <td>${escapeHtml(m.description || 'N/A')}</td>
-                <td><span class="wiki-badge">${escapeHtml(m.dataset_used || 'N/A')}</span></td>
-              </tr>
-            `).join("")}
-          </tbody>
-        </table>`
-      : `<p class="muted-text" style="font-size: 12px; margin-top: 4px;">No custom methodology entities extracted.</p>`;
+      ? `<div class="research-table-wrap"><table class="research-table"><thead><tr><th>Method or model</th><th>Description</th><th>Dataset</th></tr></thead><tbody>${paper.methods.map((m) => `<tr><td><strong>${escapeHtml(m.name)}</strong></td><td>${escapeHtml(m.description || "N/A")}</td><td>${escapeHtml(m.dataset_used || "N/A")}</td></tr>`).join("")}</tbody></table></div>`
+      : `<p class="empty-mini">No methodology entities extracted.</p>`;
 
-    // Render Claims & Limitations
     const claimsHtml = paper.claims && paper.claims.length
-      ? paper.claims.map(c => {
+      ? paper.claims.map((c) => {
           const categoryClass = c.category || "finding";
-          const levelClass = c.grounding_level || "fully_supported";
           return `
-            <div class="research-claim-card ${categoryClass}">
-              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
-                <span class="research-claim-tag ${categoryClass}">${escapeHtml(c.category)}</span>
-                <span class="wiki-badge ${levelClass === 'fully_supported' ? '' : 'warn'}" style="font-size: 8px;">${escapeHtml(c.grounding_level)}</span>
-              </div>
-              <p style="font-size: 12px; font-weight: 500; margin: 0 0 6px 0;">"${escapeHtml(c.claim_text)}"</p>
-              ${c.evidence ? `<p style="font-size: 11px; color: var(--muted); margin: 0; font-style: italic;">Evidence: "${escapeHtml(c.evidence)}"</p>` : ""}
+            <div class="research-claim-card ${escapeHtml(categoryClass)}">
+              <div class="research-claim-head"><span class="research-claim-tag ${escapeHtml(categoryClass)}">${escapeHtml(c.category || "finding")}</span><span class="wiki-badge ${c.grounding_level === "fully_supported" ? "" : "warn"}">${escapeHtml(c.grounding_level || "partially_supported")}</span></div>
+              <p>${escapeHtml(c.claim_text)}</p>
+              ${c.evidence ? `<small>Evidence: ${escapeHtml(c.evidence)}</small>` : ""}
             </div>
           `;
         }).join("")
-      : `<p class="muted-text" style="font-size: 12px;">No claims or gaps extracted from content.</p>`;
+      : `<p class="empty-mini">No claims or limitations extracted.</p>`;
 
     elements.paperDetailsContent.innerHTML = `
-      <div style="margin-bottom: 16px; border-bottom: 1px solid var(--line); padding-bottom: 12px;">
-        <h3 style="font-family: var(--font-serif); font-size: 20px; font-weight: 700; color: var(--ink); margin-bottom: 6px;">${escapeHtml(paper.title)}</h3>
-        <p style="font-size: 12px; color: var(--muted); margin: 0 0 4px 0;"><strong>Authors:</strong> ${escapeHtml(authors)}</p>
-        <div style="display: flex; gap: 8px; font-size: 11px; color: var(--muted);">
-          <span><strong>Venue:</strong> ${escapeHtml(paper.venue || "N/A")}</span>
-          <span>•</span>
-          <span><strong>Year:</strong> ${escapeHtml(paper.publication_year ? String(paper.publication_year) : "N/A")}</span>
-          <span>•</span>
-          <span><strong>DOI:</strong> ${escapeHtml(paper.doi || "N/A")}</span>
-        </div>
+      <div class="research-detail-header">
+        <h3>${escapeHtml(paper.title)}</h3>
+        <div class="research-detail-meta"><span>${escapeHtml(authors)}</span><span>${escapeHtml(paper.venue || "No venue")}</span><span>${escapeHtml(paper.publication_year ? String(paper.publication_year) : "Year unknown")}</span><span>DOI: ${escapeHtml(paper.doi || "N/A")}</span></div>
       </div>
-
-      <div style="display: grid; grid-template-columns: 1fr; gap: 20px;">
-        <div>
-          <h4 style="font-size: 14px; font-weight: 600; margin-bottom: 8px; color: var(--ink);">Abstract</h4>
-          <p style="font-size: 12.5px; line-height: 1.5; color: var(--text); background: var(--bg-hover); padding: 12px; border-radius: 4px; border-left: 3px solid var(--accent); margin: 0;">${escapeHtml(abstract)}</p>
-        </div>
-
-        <div>
-          <h4 style="font-size: 14px; font-weight: 600; margin-bottom: 8px; color: var(--ink);">Proposed Methodology & Models</h4>
-          ${methodsHtml}
-        </div>
-
-        <div>
-          <h4 style="font-size: 14px; font-weight: 600; margin-bottom: 8px; color: var(--ink);">Parsed Claims & Findings</h4>
-          ${claimsHtml}
-        </div>
-
-        <div>
-          <h4 style="font-size: 14px; font-weight: 600; margin-bottom: 8px; color: var(--ink);">Document Sections</h4>
-          ${sectionsHtml}
-        </div>
+      <div class="research-detail-grid">
+        <section class="research-detail-section"><h4>Abstract</h4><div class="research-abstract-box">${escapeHtml(paper.abstract || "No abstract extracted.")}</div></section>
+        <section class="research-detail-section"><h4>Methods and datasets</h4>${methodsHtml}</section>
+        <section class="research-detail-section"><h4>Claims and evidence</h4>${claimsHtml}</section>
+        <section class="research-detail-section"><h4>Parsed sections</h4>${sectionsHtml}</section>
       </div>
     `;
   }
@@ -2640,140 +3282,87 @@ loadWorkspaces();
   function openResearchModal(subtab = "details") {
     if (!elements.researchModal) return;
     elements.researchModal.hidden = false;
+    if (subtab === "details" && researchState.activePaperId && !researchState.activePaperDetails) {
+      loadPaperDetails(researchState.activePaperId);
+    }
     switchSubtab(subtab);
   }
 
   function closeResearchModal() {
-    if (!elements.researchModal) return;
-    elements.researchModal.hidden = true;
+    if (elements.researchModal) elements.researchModal.hidden = true;
   }
 
   function switchSubtab(subtabId) {
     researchState.activeSubtab = subtabId;
-    elements.subtabs.forEach((tab) => {
-      const active = tab.getAttribute("data-subtab") === subtabId;
-      tab.classList.toggle("active", active);
+    elements.subtabs.forEach((tab) => tab.classList.toggle("active", tab.getAttribute("data-subtab") === subtabId));
+    Object.entries(elements.panels).forEach(([panelId, panel]) => {
+      if (panel) panel.hidden = panelId !== subtabId;
     });
-
-    Object.keys(elements.panels).forEach((panelId) => {
-      if (elements.panels[panelId]) {
-        elements.panels[panelId].style.display = panelId === subtabId ? "flex" : "none";
-      }
-    });
-
-    if (subtabId === "graph") {
-      renderCitationGraph();
-    }
+    if (subtabId === "graph") renderCitationGraph("#researchGraphCanvas");
   }
 
-  async function renderCitationGraph() {
-    const canvas = document.querySelector("#researchGraphCanvas");
+  async function renderCitationGraph(targetSelector = "#researchGraphCanvas") {
+    const canvas = document.querySelector(targetSelector);
     if (!canvas) return;
-    canvas.innerHTML = `<p class="empty-mini">Loading citation connections…</p>`;
+    canvas.innerHTML = `<p class="empty-mini">Loading research map…</p>`;
     try {
       const data = await apiFetch(API.researchGraph);
-      if (!data.nodes || !data.nodes.length) {
-        canvas.innerHTML = `<p class="empty-mini">No connections found. Upload related papers referencing similar concepts.</p>`;
-        return;
-      }
-
-      // Render nodes & lines in SVG cleanly
-      let svgHtml = `<svg width="100%" height="300" style="background: var(--bg-hover); border-radius: 6px;">`;
-      
-      // Node position mappings (calculate dynamic layout simple circle coords)
-      const centerX = 350;
-      const centerY = 150;
-      const radius = 90;
-      const nodesCount = data.nodes.length;
-      
-      const nodeCoords = {};
-      data.nodes.forEach((node, idx) => {
-        const angle = (2 * Math.PI * idx) / nodesCount;
-        const x = centerX + radius * Math.cos(angle);
-        const y = centerY + radius * Math.sin(angle);
-        nodeCoords[node.id] = { x, y, label: node.label, year: node.year };
-      });
-
-      // Draw Edges / Links
-      data.links.forEach((link) => {
-        const src = nodeCoords[link.source];
-        const tgt = nodeCoords[link.target];
-        if (src && tgt) {
-          const isContradict = link.relation_type === "contradicts";
-          const color = isContradict ? "var(--danger)" : "var(--accent)";
-          svgHtml += `
-            <line x1="${src.x}" y1="${src.y}" x2="${tgt.x}" y2="${tgt.y}" 
-                  stroke="${color}" stroke-width="2" stroke-dasharray="${isContradict ? '4' : '0'}" />
-          `;
-        }
-      });
-
-      // Draw Nodes
-      Object.keys(nodeCoords).forEach((id) => {
-        const node = nodeCoords[id];
-        svgHtml += `
-          <g class="graph-node-group" style="cursor: pointer;" onclick="window.selectPaperFromGraph('${id}')">
-            <circle cx="${node.x}" cy="${node.y}" r="8" fill="var(--accent)" stroke="var(--surface)" stroke-width="2" />
-            <text x="${node.x + 12}" y="${node.y + 4}" font-size="10" font-weight="600" fill="var(--ink)" font-family="sans-serif">${escapeHtml(node.label.slice(0, 15))}...</text>
-          </g>
-        `;
-      });
-
-      svgHtml += `</svg>`;
-      canvas.innerHTML = svgHtml;
-
-      // Register select paper callback globally
-      window.selectPaperFromGraph = (paperId) => {
-        researchState.activePaperId = paperId;
-        renderResearchPapers();
-        switchSubtab("details");
-        loadPaperDetails(paperId);
-      };
-
+      canvas.innerHTML = buildGraphSvg(data, targetSelector === "#researchMapPreview" ? 240 : 420);
     } catch (e) {
       canvas.innerHTML = `<p class="inline-error">${escapeHtml(e.message)}</p>`;
     }
   }
 
+  function renderGraphPreview() {
+    if (!elements.researchMapPreview) return;
+    renderCitationGraph("#researchMapPreview");
+  }
+
+  function buildGraphSvg(data, height) {
+    if (!data.nodes || !data.nodes.length) return `<p class="empty-mini">No papers mapped yet.</p>`;
+    const width = 760;
+    const centerX = width / 2;
+    const centerY = height / 2;
+    const radius = Math.max(70, Math.min(width, height) / 2 - 45);
+    const coords = {};
+    data.nodes.forEach((node, idx) => {
+      const angle = (2 * Math.PI * idx) / data.nodes.length;
+      coords[node.id] = {
+        x: centerX + radius * Math.cos(angle),
+        y: centerY + radius * Math.sin(angle),
+        label: node.label || "Untitled"
+      };
+    });
+    const lines = (data.links || []).map((link) => {
+      const src = coords[link.source];
+      const tgt = coords[link.target];
+      if (!src || !tgt) return "";
+      const bad = link.relation_type === "contradicts";
+      return `<line x1="${src.x}" y1="${src.y}" x2="${tgt.x}" y2="${tgt.y}" stroke="${bad ? "var(--danger)" : "var(--accent)"}" stroke-width="2" stroke-dasharray="${bad ? "5 5" : "0"}" />`;
+    }).join("");
+    const nodes = Object.entries(coords).map(([id, node]) => `
+      <g class="graph-node-group" style="cursor:pointer" data-paper-id="${id}">
+        <circle cx="${node.x}" cy="${node.y}" r="10" fill="var(--accent)" stroke="var(--surface)" stroke-width="3" />
+        <text x="${node.x + 14}" y="${node.y + 4}" font-size="11" font-weight="700" fill="var(--ink)">${escapeHtml(node.label.slice(0, 24))}${node.label.length > 24 ? "..." : ""}</text>
+      </g>
+    `).join("");
+    return `<svg viewBox="0 0 ${width} ${height}" width="100%" height="${height}" role="img" aria-label="Research graph">${lines}${nodes}</svg>`;
+  }
+
   function tableToMarkdown(headers, rows) {
     let md = `| ${headers.join(" | ")} |\n`;
     md += `| ${headers.map(() => "---").join(" | ")} |\n`;
-    rows.forEach(row => {
-      // Escape pipe characters to preserve Markdown formatting
-      const cleanRow = row.map(cell => String(cell).replace(/\|/g, "\\|"));
-      md += `| ${cleanRow.join(" | ")} |\n`;
+    rows.forEach((row) => {
+      md += `| ${row.map((cell) => String(cell).replace(/\|/g, "\\|")).join(" | ")} |\n`;
     });
     return md;
   }
 
   function gapsToMarkdown(gaps) {
     let md = `# Literature Gaps and Workspace Analysis\n\n`;
-    
-    if (gaps.contradictions && gaps.contradictions.length) {
-      md += `## Cross-Paper Contradictions\n\n`;
-      gaps.contradictions.forEach(c => {
-        md += `* **Paper A**: ${c.paper_a}\n  *Claim*: "${c.claim_a}"\n`;
-        md += `* **Paper B**: ${c.paper_b}\n  *Claim*: "${c.claim_b}"\n`;
-        md += `* **Explanation**: ${c.explanation}\n\n`;
-      });
-    }
-    
-    if (gaps.untested_combinations && gaps.untested_combinations.length) {
-      md += `## Untested Methodology Combinations\n\n`;
-      gaps.untested_combinations.forEach(combo => {
-        md += `* **Methodology**: ${combo.method} (from ${combo.paper})\n`;
-        md += `* **Dataset**: ${combo.dataset} (from ${combo.dataset_paper})\n`;
-        md += `* **Value/Benefit**: ${combo.potential_benefit}\n\n`;
-      });
-    }
-    
-    if (gaps.open_challenges && gaps.open_challenges.length) {
-      md += `## Unresolved Literature Challenges\n\n`;
-      gaps.open_challenges.forEach(challenge => {
-        md += `* **Challenge**: ${challenge.challenge}\n  *Implication*: ${challenge.implication}\n\n`;
-      });
-    }
-    
+    (gaps.contradictions || []).forEach((c) => { md += `## Contradiction\n\n- ${c.paper_a}: ${c.claim_a}\n- ${c.paper_b}: ${c.claim_b}\n- Explanation: ${c.explanation}\n\n`; });
+    (gaps.untested_combinations || []).forEach((combo) => { md += `## Untested Combination\n\n- Method: ${combo.method} (${combo.paper})\n- Dataset: ${combo.dataset} (${combo.dataset_paper})\n- Value: ${combo.potential_benefit}\n\n`; });
+    (gaps.open_challenges || []).forEach((challenge) => { md += `## Open Challenge\n\n- ${challenge.challenge}\n- Implication: ${challenge.implication}\n\n`; });
     return md;
   }
 
@@ -2789,274 +3378,139 @@ loadWorkspaces();
 
   async function generateComparisonMatrix() {
     if (researchState.selectedPaperIds.size === 0) {
-      elements.compareMatrixResult.innerHTML = `<p class="inline-error" style="padding: 16px;">Please select at least one paper in the sidebar using checkboxes.</p>`;
+      elements.compareMatrixResult.innerHTML = `<p class="inline-error">Select at least one paper in the Research Library.</p>`;
       return;
     }
 
-    elements.compareMatrixResult.innerHTML = `<p class="empty-mini" style="padding: 16px;">Synthesizing comparison matrix…</p>`;
+    elements.compareMatrixResult.innerHTML = `<p class="empty-mini">Synthesizing comparison matrix…</p>`;
     try {
-      const payload = {
-        paper_ids: Array.from(researchState.selectedPaperIds),
-        query: elements.compareQueryInput.value || null
-      };
       const result = await apiFetch(API.researchCompare, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload)
+        body: JSON.stringify({ paper_ids: Array.from(researchState.selectedPaperIds), query: elements.compareQueryInput.value || null }),
+        timeout: 90000
       });
-
-      if (!result.headers || !result.rows) {
-        elements.compareMatrixResult.innerHTML = `<p class="inline-error" style="padding: 16px;">Failed to parse comparison format from agent response.</p>`;
-        return;
-      }
-
+      if (!result.headers || !result.rows) throw new Error("Comparison response was incomplete.");
       researchState.lastComparison = result;
-
-      // Render table and export bar
-      let tableHtml = `
-        <div style="padding: 10px; display: flex; gap: 8px; justify-content: flex-end; border-bottom: 1px solid var(--line); background: var(--bg-hover);">
-          <button id="copyMatrixBtn" class="secondary-button" style="padding: 4px 10px; font-size: 11px; height: auto;" type="button">📋 Copy Markdown</button>
-          <button id="downloadMatrixBtn" class="secondary-button" style="padding: 4px 10px; font-size: 11px; height: auto;" type="button">📥 Download MD</button>
-        </div>
-        <table class="research-table" style="margin-top: 0; width: 100%; border: none;">
-          <thead>
-            <tr>
-              ${result.headers.map(h => `<th>${escapeHtml(h)}</th>`).join("")}
-            </tr>
-          </thead>
-          <tbody>
-            ${result.rows.map(row => `
-              <tr>
-                ${row.map((cell, idx) => `
-                  <td>${idx === 0 ? `<strong>${escapeHtml(cell)}</strong>` : escapeHtml(cell)}</td>
-                `).join("")}
-              </tr>
-            `).join("")}
-          </tbody>
-        </table>
+      elements.compareMatrixResult.innerHTML = `
+        <div class="research-export-bar"><button id="copyMatrixBtn" class="secondary-button" type="button">Copy Markdown</button><button id="downloadMatrixBtn" class="secondary-button" type="button">Download MD</button></div>
+        <div class="research-table-wrap"><table class="research-table"><thead><tr>${result.headers.map((h) => `<th>${escapeHtml(h)}</th>`).join("")}</tr></thead><tbody>${result.rows.map((row) => `<tr>${row.map((cell, idx) => `<td>${idx === 0 ? `<strong>${escapeHtml(cell)}</strong>` : escapeHtml(cell)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>
       `;
-      elements.compareMatrixResult.innerHTML = tableHtml;
-
-      // Wire export buttons
       document.getElementById("copyMatrixBtn").addEventListener("click", () => {
-        const md = tableToMarkdown(researchState.lastComparison.headers, researchState.lastComparison.rows);
-        navigator.clipboard.writeText(md);
-        toast("Comparison matrix copied to clipboard as Markdown!");
+        navigator.clipboard.writeText(tableToMarkdown(result.headers, result.rows));
+        toast("Comparison matrix copied as Markdown.");
       });
-
-      document.getElementById("downloadMatrixBtn").addEventListener("click", () => {
-        const md = tableToMarkdown(researchState.lastComparison.headers, researchState.lastComparison.rows);
-        downloadTextFile("comparison_matrix.md", md);
-      });
-
+      document.getElementById("downloadMatrixBtn").addEventListener("click", () => downloadTextFile("comparison_matrix.md", tableToMarkdown(result.headers, result.rows)));
     } catch (e) {
-      elements.compareMatrixResult.innerHTML = `<p class="inline-error" style="padding: 16px;">${escapeHtml(e.message)}</p>`;
+      elements.compareMatrixResult.innerHTML = `<p class="inline-error">${escapeHtml(e.message)}</p>`;
     }
   }
 
   async function generateLiteratureGaps() {
     if (researchState.selectedPaperIds.size === 0) {
-      elements.gapsResult.innerHTML = `<p class="inline-error" style="padding: 16px;">Please select at least one paper in the sidebar using checkboxes.</p>`;
+      elements.gapsResult.innerHTML = `<p class="inline-error">Select at least one paper in the Research Library.</p>`;
       return;
     }
 
-    elements.gapsResult.innerHTML = `<p class="empty-mini">Searching for contradictions and methodology gaps…</p>`;
+    elements.gapsResult.innerHTML = `<p class="empty-mini">Analyzing claims, methods, and gaps…</p>`;
     try {
-      const payload = {
-        paper_ids: Array.from(researchState.selectedPaperIds)
-      };
       const result = await apiFetch(API.researchGaps, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload)
+        body: JSON.stringify({ paper_ids: Array.from(researchState.selectedPaperIds) }),
+        timeout: 90000
       });
-
       researchState.lastGaps = result;
-
-      // Render Gaps UI with export actions at the top
-      let html = `
-        <div style="margin: -16px -16px 16px -16px; padding: 10px 16px; display: flex; gap: 8px; justify-content: flex-end; border-bottom: 1px solid var(--line); background: var(--bg-hover);">
-          <button id="copyGapsBtn" class="secondary-button" style="padding: 4px 10px; font-size: 11px; height: auto;" type="button">📋 Copy Report</button>
-          <button id="downloadGapsBtn" class="secondary-button" style="padding: 4px 10px; font-size: 11px; height: auto;" type="button">📥 Download Report</button>
-        </div>
-      `;
-
-      let hasContent = false;
-
-      // Contradictions
-      if (result.contradictions && result.contradictions.length) {
-        hasContent = true;
-        html += `<h4 style="margin: 0 0 8px 0; font-size: 13px; font-weight: 700; color: var(--danger);">Cross-Paper Contradictions</h4>`;
-        result.contradictions.forEach(c => {
-          html += `
-            <div class="research-claim-card limitation">
-              <p style="font-size: 12px; margin: 0 0 6px 0;"><strong>${escapeHtml(c.paper_a)}</strong> claims: <em>"${escapeHtml(c.claim_a)}"</em></p>
-              <p style="font-size: 12px; margin: 0 0 6px 0;"><strong>${escapeHtml(c.paper_b)}</strong> claims: <em>"${escapeHtml(c.claim_b)}"</em></p>
-              <p style="font-size: 11px; color: var(--muted); margin: 0; padding-top: 4px; border-top: 1px dashed var(--line);"><strong>Explanation:</strong> ${escapeHtml(c.explanation)}</p>
-            </div>
-          `;
-        });
-      }
-
-      // Untested Combinations
-      if (result.untested_combinations && result.untested_combinations.length) {
-        hasContent = true;
-        html += `<h4 style="margin: 16px 0 8px 0; font-size: 13px; font-weight: 700; color: var(--accent);">Untested Methodology Combinations</h4>`;
-        result.untested_combinations.forEach(combo => {
-          html += `
-            <div class="research-claim-card hypothesis">
-              <p style="font-size: 12px; margin: 0 0 4px 0;">Apply methodology <strong>${escapeHtml(combo.method)}</strong> (from <em>${escapeHtml(combo.paper)}</em>) to evaluation dataset <strong>${escapeHtml(combo.dataset)}</strong> (from <em>${escapeHtml(combo.dataset_paper)}</em>).</p>
-              <p style="font-size: 11px; color: var(--muted); margin: 0;"><strong>Potential Value:</strong> ${escapeHtml(combo.potential_benefit)}</p>
-            </div>
-          `;
-        });
-      }
-
-      // Open Challenges
-      if (result.open_challenges && result.open_challenges.length) {
-        hasContent = true;
-        html += `<h4 style="margin: 16px 0 8px 0; font-size: 13px; font-weight: 700; color: #f39c12;">Unresolved Literature Challenges</h4>`;
-        result.open_challenges.forEach(challenge => {
-          html += `
-            <div class="research-claim-card gap">
-              <p style="font-size: 12px; font-weight: 600; margin: 0 0 4px 0;">${escapeHtml(challenge.challenge)}</p>
-              <p style="font-size: 11px; color: var(--muted); margin: 0;"><strong>Implication:</strong> ${escapeHtml(challenge.implication)}</p>
-            </div>
-          `;
-        });
-      }
-
-      if (!hasContent) {
-        html = `<p class="empty-mini">Workspace comparison finished. No notable conflicts or gaps found across selections.</p>`;
-      }
-
-      elements.gapsResult.innerHTML = html;
-
-      // Wire export buttons if we have content
-      if (hasContent) {
+      const sections = [];
+      (result.contradictions || []).forEach((c) => sections.push(`<div class="research-claim-card limitation"><div class="research-claim-head"><span class="research-claim-tag limitation">Contradiction</span></div><p><strong>${escapeHtml(c.paper_a)}</strong>: ${escapeHtml(c.claim_a)}</p><p><strong>${escapeHtml(c.paper_b)}</strong>: ${escapeHtml(c.claim_b)}</p><small>${escapeHtml(c.explanation)}</small></div>`));
+      (result.untested_combinations || []).forEach((combo) => sections.push(`<div class="research-claim-card hypothesis"><div class="research-claim-head"><span class="research-claim-tag hypothesis">Untested pair</span></div><p>Try <strong>${escapeHtml(combo.method)}</strong> from ${escapeHtml(combo.paper)} on <strong>${escapeHtml(combo.dataset)}</strong> from ${escapeHtml(combo.dataset_paper)}.</p><small>${escapeHtml(combo.potential_benefit)}</small></div>`));
+      (result.open_challenges || []).forEach((challenge) => sections.push(`<div class="research-claim-card gap"><div class="research-claim-head"><span class="research-claim-tag gap">Open challenge</span></div><p>${escapeHtml(challenge.challenge)}</p><small>${escapeHtml(challenge.implication)}</small></div>`));
+      elements.gapsResult.innerHTML = sections.length
+        ? `<div class="research-export-bar"><button id="copyGapsBtn" class="secondary-button" type="button">Copy Report</button><button id="downloadGapsBtn" class="secondary-button" type="button">Download MD</button></div>${sections.join("")}`
+        : `<p class="empty-mini">No notable contradictions or gaps found across this selection.</p>`;
+      if (sections.length) {
         document.getElementById("copyGapsBtn").addEventListener("click", () => {
-          const md = gapsToMarkdown(researchState.lastGaps);
-          navigator.clipboard.writeText(md);
-          toast("Literature gaps report copied to clipboard as Markdown!");
+          navigator.clipboard.writeText(gapsToMarkdown(result));
+          toast("Literature gaps report copied.");
         });
-
-        document.getElementById("downloadGapsBtn").addEventListener("click", () => {
-          const md = gapsToMarkdown(researchState.lastGaps);
-          downloadTextFile("literature_gaps_report.md", md);
-        });
-      } else {
-        const btnRow = elements.gapsResult.querySelector("div");
-        if (btnRow) btnRow.style.display = "none";
+        document.getElementById("downloadGapsBtn").addEventListener("click", () => downloadTextFile("literature_gaps_report.md", gapsToMarkdown(result)));
       }
-
     } catch (e) {
       elements.gapsResult.innerHTML = `<p class="inline-error">${escapeHtml(e.message)}</p>`;
     }
   }
 
-  // Wire event handlers
-  if (elements.refreshResearchBtn) elements.refreshResearchBtn.addEventListener("click", loadResearchPapers);
-  if (elements.researchModalCloseBtn) elements.researchModalCloseBtn.addEventListener("click", closeResearchModal);
-
-  if (elements.researchGraphBtn) {
-    elements.researchGraphBtn.addEventListener("click", () => {
-      openResearchModal("graph");
-    });
-  }
-
-  if (elements.researchCompareBtn) {
-    elements.researchCompareBtn.addEventListener("click", () => {
-      openResearchModal("compare");
-    });
-  }
-
-  if (elements.researchGapsBtn) {
-    elements.researchGapsBtn.addEventListener("click", () => {
-      openResearchModal("gaps");
-    });
-  }
-
-  if (elements.runCompareBtn) elements.runCompareBtn.addEventListener("click", generateComparisonMatrix);
-  if (elements.runGapsBtn) elements.runGapsBtn.addEventListener("click", generateLiteratureGaps);
-
-  elements.subtabs.forEach((tab) => {
-    tab.addEventListener("click", () => {
-      const subtabId = tab.getAttribute("data-subtab");
-      switchSubtab(subtabId);
-    });
-  });
-
-  // Handle click on drag & drop / upload zone
-  if (elements.researchUploadArea && elements.researchPdfInput) {
-    elements.researchUploadArea.addEventListener("click", () => {
-      elements.researchPdfInput.click();
-    });
-
-    elements.researchPdfInput.addEventListener("change", async (e) => {
-      const file = e.target.files[0];
-      if (!file) return;
-      
-      if (file.type !== "application/pdf" && !file.name.toLowerCase().endsWith(".pdf")) {
-        showResearchUploadError("Please choose a PDF file.");
-        return;
-      }
-
-      const defaultDiv = document.getElementById("researchUploadDefault");
-      const activeDiv = document.getElementById("researchUploadActive");
-      const messageSpan = document.getElementById("researchUploadMessage");
-      
-      if (defaultDiv && activeDiv && messageSpan) {
-        defaultDiv.style.display = "none";
-        activeDiv.style.display = "flex";
-        messageSpan.textContent = "Uploading document...";
-        elements.researchUploadArea.style.borderColor = "var(--accent)";
-      }
-      
-      const form = new FormData();
-      form.append("file", file);
-      
-      try {
-        const url = `${API.upload}?force_research=true`;
-        const response = await apiFetch(url, { method: "POST", body: form, timeout: 120000 });
-        toast(`Uploaded ${response.filename}. Initiated extraction.`);
-        
-        if (messageSpan) {
-          messageSpan.textContent = "Initiated analysis...";
-        }
-
-        // Reload standard wiki pages list & research list
-        if (window.loadWikiPages) await window.loadWikiPages();
-        await loadResearchPapers();
-
-        setTimeout(() => {
-          if (defaultDiv && activeDiv) {
-            defaultDiv.style.display = "block";
-            activeDiv.style.display = "none";
-            elements.researchUploadArea.style.borderColor = "var(--line)";
-          }
-        }, 2000);
-
-      } catch (error) {
-        showResearchUploadError(error.message);
-      }
-    });
+  function setUploadBusy(isBusy, message = "Uploading document...") {
+    if (elements.researchUploadDefault) elements.researchUploadDefault.style.display = isBusy ? "none" : "grid";
+    if (elements.researchUploadActive) elements.researchUploadActive.style.display = isBusy ? "grid" : "none";
+    if (elements.researchUploadMessage) elements.researchUploadMessage.textContent = message;
+    if (elements.researchUploadArea) elements.researchUploadArea.disabled = isBusy;
   }
 
   function showResearchUploadError(msg) {
     toast(msg, "error");
-    const defaultDiv = document.getElementById("researchUploadDefault");
-    const activeDiv = document.getElementById("researchUploadActive");
-    const messageSpan = document.getElementById("researchUploadMessage");
-    
-    if (messageSpan && activeDiv && defaultDiv) {
-      messageSpan.textContent = `Error: ${msg}`;
-      elements.researchUploadArea.style.borderColor = "var(--danger)";
-      setTimeout(() => {
-        defaultDiv.style.display = "block";
-        activeDiv.style.display = "none";
-        elements.researchUploadArea.style.borderColor = "var(--line)";
-      }, 5000);
+    setUploadBusy(true, `Error: ${msg}`);
+    setTimeout(() => setUploadBusy(false), 4000);
+  }
+
+  async function uploadResearchPdf(file) {
+    if (!file) return;
+    if (file.type !== "application/pdf" && !file.name.toLowerCase().endsWith(".pdf")) {
+      showResearchUploadError("Please choose a PDF file.");
+      return;
+    }
+    setUploadBusy(true, "Uploading document...");
+    const form = new FormData();
+    form.append("file", file);
+    try {
+      const response = await apiFetch(`${API.upload}?force_research=true`, { method: "POST", body: form, timeout: 120000 });
+      toast(`Uploaded ${response.filename}. Analysis started.`);
+      setUploadBusy(true, "Analyzing paper...");
+      if (window.loadWikiPages) await window.loadWikiPages();
+      await loadResearchPapers();
+      setTimeout(() => setUploadBusy(false), 1500);
+    } catch (error) {
+      showResearchUploadError(error.message);
+    } finally {
+      if (elements.researchPdfInput) elements.researchPdfInput.value = "";
     }
   }
 
+  function openCompare() {
+    openResearchModal("compare");
+  }
+
+  function openGaps() {
+    openResearchModal("gaps");
+  }
+
+  function openGraph() {
+    openResearchModal("graph");
+  }
+
+  if (elements.refreshResearchBtn) elements.refreshResearchBtn.addEventListener("click", loadResearchPapers);
+  if (elements.researchModalCloseBtn) elements.researchModalCloseBtn.addEventListener("click", closeResearchModal);
+  if (elements.researchGraphBtn) elements.researchGraphBtn.addEventListener("click", openGraph);
+  if (elements.researchCompareBtn) elements.researchCompareBtn.addEventListener("click", openCompare);
+  if (elements.researchGapsBtn) elements.researchGapsBtn.addEventListener("click", openGaps);
+  if (elements.researchBoardGraphBtn) elements.researchBoardGraphBtn.addEventListener("click", openGraph);
+  if (elements.researchBoardCompareBtn) elements.researchBoardCompareBtn.addEventListener("click", openCompare);
+  if (elements.researchBoardGapsBtn) elements.researchBoardGapsBtn.addEventListener("click", openGaps);
+  if (elements.runCompareBtn) elements.runCompareBtn.addEventListener("click", generateComparisonMatrix);
+  if (elements.runGapsBtn) elements.runGapsBtn.addEventListener("click", generateLiteratureGaps);
+  if (elements.researchOpenDetailsBtn) elements.researchOpenDetailsBtn.addEventListener("click", () => openResearchModal("details"));
+  if (elements.researchClearSelectionBtn) {
+    elements.researchClearSelectionBtn.addEventListener("click", () => {
+      researchState.selectedPaperIds.clear();
+      renderResearchPapers();
+      renderResearchDashboard();
+    });
+  }
+
+  elements.subtabs.forEach((tab) => tab.addEventListener("click", () => switchSubtab(tab.getAttribute("data-subtab"))));
+
+  if (elements.researchUploadArea && elements.researchPdfInput) {
+    elements.researchUploadArea.addEventListener("click", () => elements.researchPdfInput.click());
+    elements.researchPdfInput.addEventListener("change", (e) => uploadResearchPdf(e.target.files[0]));
+  }
 })();

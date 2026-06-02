@@ -28,6 +28,7 @@ from app.services.chat_sessions import (
     thread_context_for_parent,
 )
 from app.services.llm_factory import build_user_llm
+from app.services.tier4 import stale_fact_warning
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
@@ -62,6 +63,9 @@ async def chat(
         response = await generate_report_from_chat(db, user, workspace, request)
     else:
         response = await ChatService(wiki_store_for_workspace(workspace), llm=user_llm).answer(request)
+    warning = stale_fact_warning(db, workspace_id=workspace.id, page_slugs=response.used_pages)
+    if warning and not response.answer.startswith("Note:"):
+        response.answer = warning + response.answer
     add_message(
         db,
         user=user,

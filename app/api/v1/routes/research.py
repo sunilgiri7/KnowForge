@@ -1,6 +1,7 @@
 from typing import Annotated, List, Optional
 from fastapi import APIRouter, Depends, Body
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 import json
 
 from app.api.deps import get_current_user, get_active_workspace_dep
@@ -8,8 +9,131 @@ from app.db.models import User, Workspace, ResearchPaper, ResearchPaperSection, 
 from app.db.session import get_db
 from app.services.llm_factory import build_user_llm
 from app.llmwiki.text import safe_format
+from app.core.errors import KnowForgeError
 
 router = APIRouter(prefix="/research", tags=["research"])
+
+
+def _load_json_list(value: str | None) -> list:
+    if not value:
+        return []
+    try:
+        data = json.loads(value)
+        return data if isinstance(data, list) else []
+    except Exception:
+        return []
+
+
+def _paper_status(db: Session, paper_id: str) -> tuple[str, str | None]:
+    job = db.query(ResearchAnalysisJob).filter_by(paper_id=paper_id).first()
+    return (job.status if job else "pending", job.error_message if job else None)
+
+
+def _paper_card(db: Session, paper: ResearchPaper) -> dict:
+    status, error_message = _paper_status(db, paper.id)
+    method_count = db.query(func.count(ResearchMethod.id)).filter_by(paper_id=paper.id).scalar() or 0
+    claim_count = db.query(func.count(ResearchClaim.id)).filter_by(paper_id=paper.id).scalar() or 0
+    section_count = db.query(func.count(ResearchPaperSection.id)).filter_by(paper_id=paper.id).scalar() or 0
+    return {
+        "id": paper.id,
+        "title": paper.title,
+        "authors": _load_json_list(paper.authors),
+        "venue": paper.venue,
+        "doi": paper.doi,
+        "publication_year": paper.publication_year,
+        "slug": paper.slug,
+        "created_at": paper.created_at.isoformat(),
+        "status": status,
+        "error_message": error_message,
+        "method_count": method_count,
+        "claim_count": claim_count,
+        "section_count": section_count,
+    }
+
+
+def _methods_and_claims(db: Session, paper: ResearchPaper) -> tuple[list[ResearchMethod], list[ResearchClaim]]:
+    methods = db.query(ResearchMethod).filter_by(paper_id=paper.id).all()
+    claims = db.query(ResearchClaim).filter_by(paper_id=paper.id).all()
+    return methods, claims
+
+
+def _fallback_comparison(db: Session, papers: list[ResearchPaper]) -> dict:
+    rows = []
+    for paper in papers:
+        methods, claims = _methods_and_claims(db, paper)
+        method_text = "; ".join([f"{m.name}: {m.description}" for m in methods[:4]]) or "No method extracted yet"
+        datasets = ", ".join(sorted({m.dataset_used for m in methods if m.dataset_used})) or "No dataset extracted"
+        findings = "; ".join([c.claim_text for c in claims if (c.category or "finding") == "finding"][:3]) or "; ".join([c.claim_text for c in claims[:3]]) or "No claims extracted yet"
+        limits = "; ".join([c.claim_text for c in claims if c.category in {"limitation", "gap"}][:3]) or "No explicit limitations extracted"
+        rows.append([paper.title, method_text, datasets, findings, limits])
+    return {
+        "headers": ["Paper", "Methodologies/Models", "Datasets Evaluated", "Key Findings/Metrics", "Limitations"],
+        "rows": rows,
+        "fallback": True,
+        "note": "Generated from extracted entities because the AI synthesis call was unavailable."
+    }
+
+
+def _fallback_gaps(db: Session, papers: list[ResearchPaper]) -> dict:
+    method_items = []
+    dataset_items = []
+    open_challenges = []
+    contradictions = []
+    for paper in papers:
+        methods, claims = _methods_and_claims(db, paper)
+        for method in methods:
+            method_items.append((paper, method))
+            if method.dataset_used:
+                dataset_items.append((paper, method.dataset_used))
+        for claim in claims:
+            text = claim.claim_text.strip()
+            if claim.category in {"limitation", "gap"}:
+                open_challenges.append({
+                    "challenge": text,
+                    "implication": f"Consider a follow-up study that directly addresses this limitation from {paper.title}."
+                })
+    for i, paper_a in enumerate(papers):
+        claims_a = db.query(ResearchClaim).filter_by(paper_id=paper_a.id).all()
+        for paper_b in papers[i + 1:]:
+            claims_b = db.query(ResearchClaim).filter_by(paper_id=paper_b.id).all()
+            for ca in claims_a[:8]:
+                for cb in claims_b[:8]:
+                    a = ca.claim_text.lower()
+                    b = cb.claim_text.lower()
+                    if any(w in a for w in ["outperform", "improve", "higher", "better"]) and any(w in b for w in ["underperform", "fail", "lower", "worse", "limitation"]):
+                        contradictions.append({
+                            "claim_a": ca.claim_text,
+                            "paper_a": paper_a.title,
+                            "claim_b": cb.claim_text,
+                            "paper_b": paper_b.title,
+                            "explanation": "Heuristic check found positive-performance language in one paper and negative/limitation language in another. Review the evidence before treating it as a true contradiction."
+                        })
+                        break
+                if contradictions:
+                    break
+    untested = []
+    for paper, method in method_items[:8]:
+        for dataset_paper, dataset in dataset_items[:8]:
+            if dataset_paper.id != paper.id:
+                untested.append({
+                    "method": method.name,
+                    "paper": paper.title,
+                    "dataset": dataset,
+                    "dataset_paper": dataset_paper.title,
+                    "potential_benefit": "Cross-evaluating this method on another paper's dataset can reveal robustness and generalization gaps."
+                })
+                break
+    if not open_challenges and not untested and papers:
+        open_challenges.append({
+            "challenge": "The selected papers do not expose enough extracted limitations or datasets for a strong automated gap analysis.",
+            "implication": "Open paper details, verify extraction quality, or select papers with richer methods and limitations."
+        })
+    return {
+        "contradictions": contradictions[:5],
+        "untested_combinations": untested[:8],
+        "open_challenges": open_challenges[:8],
+        "fallback": True
+    }
 
 
 @router.get("/papers")
@@ -25,23 +149,38 @@ def list_papers(
         ResearchPaper.workspace_id == workspace.id
     ).order_by(ResearchPaper.created_at.desc()).all()
 
-    results = []
+    return [_paper_card(db, paper) for paper in papers]
+
+
+@router.get("/summary")
+def research_summary(
+    workspace: Annotated[Workspace, Depends(get_active_workspace_dep)],
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)]
+):
+    papers = db.query(ResearchPaper).filter(ResearchPaper.workspace_id == workspace.id).all()
+    status_counts = {"pending": 0, "processing": 0, "done": 0, "completed": 0, "failed": 0}
     for paper in papers:
-        # Get job status
-        job = db.query(ResearchAnalysisJob).filter_by(paper_id=paper.id).first()
-        results.append({
-            "id": paper.id,
-            "title": paper.title,
-            "authors": json.loads(paper.authors) if paper.authors else [],
-            "venue": paper.venue,
-            "doi": paper.doi,
-            "publication_year": paper.publication_year,
-            "slug": paper.slug,
-            "created_at": paper.created_at.isoformat(),
-            "status": job.status if job else "pending",
-            "error_message": job.error_message if job else None
-        })
-    return results
+        status, _ = _paper_status(db, paper.id)
+        status_counts[status] = status_counts.get(status, 0) + 1
+    method_count = db.query(func.count(ResearchMethod.id)).filter(ResearchMethod.workspace_id == workspace.id).scalar() or 0
+    claim_count = db.query(func.count(ResearchClaim.id)).filter(ResearchClaim.workspace_id == workspace.id).scalar() or 0
+    edge_count = db.query(func.count(ResearchPaperEdge.id)).filter(ResearchPaperEdge.workspace_id == workspace.id).scalar() or 0
+    limitation_count = db.query(func.count(ResearchClaim.id)).filter(
+        ResearchClaim.workspace_id == workspace.id,
+        ResearchClaim.category.in_(["limitation", "gap"])
+    ).scalar() or 0
+    return {
+        "total_papers": len(papers),
+        "analyzed_papers": status_counts.get("done", 0) + status_counts.get("completed", 0),
+        "processing_papers": status_counts.get("pending", 0) + status_counts.get("processing", 0),
+        "failed_papers": status_counts.get("failed", 0),
+        "method_count": method_count,
+        "claim_count": claim_count,
+        "edge_count": edge_count,
+        "limitation_count": limitation_count,
+        "status_counts": status_counts,
+    }
 
 
 @router.get("/papers/{paper_id}")
@@ -59,7 +198,7 @@ def get_paper_details(
         ResearchPaper.workspace_id == workspace.id
     ).first()
     if not paper:
-        return {"error": "Paper not found"}
+        raise KnowForgeError("Paper not found.", status_code=404, code="paper_not_found")
 
     sections = db.query(ResearchPaperSection).filter_by(paper_id=paper.id).all()
     methods = db.query(ResearchMethod).filter_by(paper_id=paper.id).all()
@@ -69,7 +208,7 @@ def get_paper_details(
     return {
         "id": paper.id,
         "title": paper.title,
-        "authors": json.loads(paper.authors) if paper.authors else [],
+        "authors": _load_json_list(paper.authors),
         "venue": paper.venue,
         "doi": paper.doi,
         "publication_year": paper.publication_year,
@@ -200,10 +339,7 @@ async def generate_comparison(
         )
     except Exception:
         # Fallback empty structure on rate limit / api errors
-        comparison_res = {
-            "headers": ["Paper", "Methodologies/Models", "Datasets Evaluated", "Key Findings/Metrics", "Limitations"],
-            "rows": [[p.title, "LLM Extraction Offline", "N/A", "N/A", "N/A"] for p in papers]
-        }
+        comparison_res = _fallback_comparison(db, papers)
 
     # Save to insights table
     insight = ResearchInsight(
@@ -294,17 +430,7 @@ async def generate_literature_gaps(
             temperature=0.15
         )
     except Exception as exc:
-        # Fallback structure on error
-        gaps_res = {
-            "contradictions": [],
-            "untested_combinations": [],
-            "open_challenges": [
-                {
-                    "challenge": "LLM Synthesis Offline. Could not check research gaps automatically.",
-                    "implication": str(exc)
-                }
-            ]
-        }
+        gaps_res = _fallback_gaps(db, papers)
 
     # Save to insights
     insight = ResearchInsight(
@@ -335,7 +461,7 @@ def delete_paper(
     ).first()
     
     if not paper:
-        return {"error": "Paper not found"}
+        raise KnowForgeError("Paper not found.", status_code=404, code="paper_not_found")
 
     # Delete related records
     db.query(ResearchPaperSection).filter_by(paper_id=paper.id).delete()

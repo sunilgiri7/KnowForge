@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -287,7 +287,120 @@ class WikiFactEvent(Base):
     expiration_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     source_quote: Mapped[str] = mapped_column(Text, default="")
     confidence: Mapped[float] = mapped_column(Float, default=1.0, nullable=False)
+    # pending_review | reviewed
+    review_status: Mapped[str] = mapped_column(String(30), default="pending_review", nullable=False)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    reviewed_by: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    review_note: Mapped[str] = mapped_column(Text, default="", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+    reviewer: Mapped[User | None] = relationship(foreign_keys=[reviewed_by])
+
+
+# ---------------------------------------------------------------------------
+# Tier 4: Proactive Intelligence Layer
+# ---------------------------------------------------------------------------
+
+
+class KnowledgeHealthSnapshot(Base):
+    __tablename__ = "knowledge_health_snapshots"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    workspace_id: Mapped[str] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+    )
+    overall_score: Mapped[int] = mapped_column(Integer, nullable=False)
+    freshness_score: Mapped[int] = mapped_column(Integer, nullable=False)
+    accuracy_score: Mapped[int] = mapped_column(Integer, nullable=False)
+    completeness_score: Mapped[int] = mapped_column(Integer, nullable=False)
+    staleness_score: Mapped[int] = mapped_column(Integer, nullable=False)
+    integrity_score: Mapped[int] = mapped_column(Integer, nullable=False)
+    action_items_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)
+
+
+class KnowledgeDigest(Base):
+    __tablename__ = "knowledge_digests"
+    __table_args__ = (
+        UniqueConstraint("workspace_id", "user_id", "digest_date", name="uq_digest_workspace_user_date"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    workspace_id: Mapped[str] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+    )
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    digest_date: Mapped[date] = mapped_column(Date, index=True)
+    title: Mapped[str] = mapped_column(String(255), default="Daily Knowledge Digest", nullable=False)
+    content_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
+    email_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class Notification(Base):
+    __tablename__ = "notifications"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    workspace_id: Mapped[str] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+    )
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    notification_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    body: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    target_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    target_id: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    payload_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
+    read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)
+
+
+class FlashCard(Base):
+    __tablename__ = "flashcards"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    workspace_id: Mapped[str] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+    )
+    page_slug: Mapped[str] = mapped_column(String(255), index=True)
+    question: Mapped[str] = mapped_column(Text, nullable=False)
+    answer: Mapped[str] = mapped_column(Text, nullable=False)
+    difficulty: Mapped[str] = mapped_column(String(20), default="medium", nullable=False)
+    source_quote: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    source_hash: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    created_by: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
+    )
+
+
+class FlashCardReview(Base):
+    __tablename__ = "flashcard_reviews"
+    __table_args__ = (
+        UniqueConstraint("card_id", "user_id", name="uq_flashcard_user_progress"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    card_id: Mapped[str] = mapped_column(ForeignKey("flashcards.id", ondelete="CASCADE"), index=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    ease_factor: Mapped[float] = mapped_column(Float, default=2.5, nullable=False)
+    interval_days: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    repetitions: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    next_review_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)
+    last_reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_result: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    result_history_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
+    )
+
+    card: Mapped[FlashCard] = relationship(foreign_keys=[card_id])
 
 
 # ---------------------------------------------------------------------------

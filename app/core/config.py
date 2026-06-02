@@ -56,6 +56,11 @@ class Settings(BaseSettings):
     contradiction_scan_after_ingest: bool = True
     contradiction_ingest_max_pairs: int = 8
 
+    tier4_digest_enabled: bool = True
+    tier4_digest_hour_utc: int = 3
+    tier4_digest_email_enabled: bool = True
+    tier4_fact_expiring_days: int = 30
+
     db_host: str = "localhost"
     db_port: int = 5432
     db_name: str = "knowforge"

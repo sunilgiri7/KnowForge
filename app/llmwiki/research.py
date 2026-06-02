@@ -217,12 +217,102 @@ class ResearchPaperAnalyzer:
             return True
 
         except Exception as exc:
-            job.status = "failed"
-            job.error_message = str(exc)
-            job.completed_at = datetime.now(UTC)
-            self.db.commit()
-            print(f"[Research Intelligence] Paper pipeline details extraction failed: {exc}")
+            print(f"[Research Intelligence] LLM details extraction failed: {exc}. Using heuristic fallback.")
+            try:
+                fallback = self.extract_details_heuristically(text)
+                for item in fallback.get("methods", []):
+                    method_name = (item.get("name") or "").strip()
+                    if not method_name:
+                        continue
+                    self.db.add(ResearchMethod(
+                        workspace_id=workspace_id,
+                        paper_id=paper.id,
+                        name=method_name[:120],
+                        description=(item.get("description") or "Extracted from methodology-like section.").strip(),
+                        dataset_used=item.get("dataset_used")
+                    ))
+                for claim in fallback.get("claims", []):
+                    claim_text = (claim.get("claim_text") or "").strip()
+                    if not claim_text:
+                        continue
+                    self.db.add(ResearchClaim(
+                        workspace_id=workspace_id,
+                        paper_id=paper.id,
+                        claim_text=claim_text,
+                        category=claim.get("category", "finding"),
+                        evidence=claim.get("evidence"),
+                        grounding_level=claim.get("grounding_level", "partially_supported")
+                    ))
+                self.db.commit()
+                self.link_citation_edges(workspace_id, paper, text)
+                job.status = "done"
+                job.error_message = f"AI extraction unavailable; heuristic extraction used. {str(exc)[:300]}"
+                job.completed_at = datetime.now(UTC)
+                self.db.commit()
+            except Exception as fallback_exc:
+                job.status = "failed"
+                job.error_message = f"AI and heuristic extraction failed: {fallback_exc}"
+                job.completed_at = datetime.now(UTC)
+                self.db.commit()
             return True
+
+    @staticmethod
+    def extract_details_heuristically(text: str) -> dict:
+        sections = ResearchPaperAnalyzer.parse_sections_heuristically(text)
+        methods = []
+        claims = []
+        dataset_pattern = re.compile(r"\b([A-Z][A-Za-z0-9_-]*(?:\s+[A-Z][A-Za-z0-9_-]*){0,3})\s+(?:dataset|benchmark|corpus|data set)\b", re.IGNORECASE)
+        method_keywords = ["method", "model", "framework", "algorithm", "architecture", "approach", "pipeline", "system"]
+        finding_keywords = ["outperform", "improve", "achieve", "show", "demonstrate", "result", "accuracy", "performance", "effective"]
+        limitation_keywords = ["limitation", "future work", "fail", "cannot", "challenge", "gap", "underperform", "constraint"]
+
+        for section in sections:
+            content = re.sub(r"\s+", " ", section.get("content", "")).strip()
+            if not content:
+                continue
+            sentences = re.split(r"(?<=[.!?])\s+", content)
+            section_type = section.get("section_type", "other")
+            if section_type == "methodology" or any(k in section.get("heading", "").lower() for k in method_keywords):
+                excerpt = " ".join(sentences[:3]).strip()
+                dataset_match = dataset_pattern.search(content)
+                methods.append({
+                    "name": section.get("heading") or "Extracted Method",
+                    "description": trim_to_chars(excerpt or content, 700),
+                    "dataset_used": dataset_match.group(1).strip() if dataset_match else None
+                })
+            for sentence in sentences:
+                low = sentence.lower()
+                clean = sentence.strip()
+                if len(clean) < 45 or len(clean) > 450:
+                    continue
+                if any(k in low for k in limitation_keywords):
+                    claims.append({
+                        "claim_text": clean,
+                        "category": "limitation" if "limitation" in low or "future work" in low else "gap",
+                        "evidence": clean,
+                        "grounding_level": "partially_supported"
+                    })
+                elif any(k in low for k in finding_keywords):
+                    claims.append({
+                        "claim_text": clean,
+                        "category": "finding",
+                        "evidence": clean,
+                        "grounding_level": "partially_supported"
+                    })
+                if len(claims) >= 12:
+                    break
+            if len(claims) >= 12:
+                break
+
+        if not methods:
+            introduction = next((s for s in sections if s.get("section_type") in {"methodology", "introduction"}), None)
+            if introduction:
+                methods.append({
+                    "name": introduction.get("heading") or "Paper Approach",
+                    "description": trim_to_chars(re.sub(r"\s+", " ", introduction.get("content", "")), 700),
+                    "dataset_used": None
+                })
+        return {"methods": methods[:6], "claims": claims[:12]}
 
     @staticmethod
     def parse_sections_heuristically(text: str) -> list[dict]:
