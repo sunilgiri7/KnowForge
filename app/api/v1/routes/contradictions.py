@@ -1,11 +1,13 @@
 from typing import Annotated
 
 from fastapi import APIRouter, Depends
+from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, wiki_store_for_workspace, get_active_workspace_dep
 from app.db.models import User, Workspace
+from app.db.session import get_db
 from app.llmwiki.contradictions import ContradictionScanner, ContradictionStore
-from app.llmwiki.groq import GroqClient
+from app.services.llm_factory import build_user_llm
 from app.schemas.llmwiki import (
     ContradictionScanResponse,
     ContradictionStatusUpdate,
@@ -30,9 +32,10 @@ async def list_contradictions(
 async def scan_contradictions(
     workspace: Annotated[Workspace, Depends(get_active_workspace_dep)],
     user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
 ) -> ContradictionScanResponse:
     wiki_store = wiki_store_for_workspace(workspace)
-    scanner = ContradictionScanner(wiki_store, GroqClient())
+    scanner = ContradictionScanner(wiki_store, build_user_llm(db, user))
     scanned_pairs, new_conflicts = await scanner.scan()
     records = ContradictionStore(wiki_store)
     open_items = records.list_open()

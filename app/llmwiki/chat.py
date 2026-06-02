@@ -282,8 +282,8 @@ class ChatService:
                     ),
                     False,
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                print(f"[Chat] LLM answer generation failed: {exc}")
         return self._local_answer(question, context, route_confidence=route_confidence), True
 
     async def _generate_direct_answer(
@@ -307,10 +307,11 @@ class ChatService:
             )
             return self._clean_answer_text(text), True, None
         except Exception as exc:
+            print(f"[Chat] Direct LLM answer generation failed: {exc}")
             return (
-                "We currently have insufficient tokens. Please try again shortly.",
+                "The AI model is temporarily unavailable. Please try again in a moment.",
                 False,
-                f"LLM request failed: {exc.__class__.__name__}",
+                f"LLM request failed: {exc}",
             )
 
     # ── Verification ──────────────────────────────────────────────────────────

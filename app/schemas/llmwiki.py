@@ -51,13 +51,16 @@ class WikiPageRename(BaseModel):
     title: str = Field(min_length=1, max_length=240)
 
 
-LlmProvider = Literal["openrouter", "openai", "anthropic", "gemini"]
+LlmProvider = Literal["openrouter", "openai", "anthropic", "gemini", "bedrock"]
 
 
 class LlmKeyUpsertRequest(BaseModel):
     provider: LlmProvider
     api_key: str = Field(min_length=6, max_length=4000)
     model: str | None = Field(default=None, max_length=120)
+    # AWS Bedrock extras (only used when provider == "bedrock")
+    aws_secret_access_key: str | None = Field(default=None, max_length=4000)
+    aws_region: str | None = Field(default=None, max_length=40)
 
 
 class LlmKeyStatus(BaseModel):
@@ -156,6 +159,8 @@ class SourceUploadResponse(BaseModel):
     text_chars: int
     wiki_page_slug: str | None = None
     message: str
+    status: str = "completed"
+    upload_id: str | None = None
 
 
 class KnowledgeGapEvent(BaseModel):

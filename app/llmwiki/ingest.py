@@ -45,10 +45,10 @@ class CompileState(TypedDict, total=False):
 class SourceIngestor:
     def __init__(self, store: WikiStore, llm: GroqClient | None = None):
         self.store = store
-        # Standard client: 2048 tokens / 40s timeout — used for answering & compaction
+        # Use user-provided LLM if configured; fallback to GroqClient
         self.llm = llm or GroqClient()
-        # Compile client: higher token budget + longer timeout — used ONLY during ingestion
-        self.compile_llm = GroqClient(
+        # Use user-provided LLM for compile steps if available, fallback to high-budget system GroqClient
+        self.compile_llm = llm if llm is not None else GroqClient(
             max_completion_tokens=settings.groq_compile_max_completion_tokens,
             timeout_seconds=settings.groq_compile_timeout_seconds,
         )

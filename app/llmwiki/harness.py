@@ -20,7 +20,14 @@ from dataclasses import dataclass, field
 from app.core.config import settings
 from app.llmwiki.contradictions import ContradictionScanner
 from app.llmwiki.groq import GroqClient
-from app.llmwiki.indexer import PageCandidate, WikiIndexer
+from app.llmwiki.indexer import (
+    EXACT_EVIDENCE_TERMS,
+    PageCandidate,
+    SELF_PROFILE_TERMS,
+    VAGUE_DOC_TERMS,
+    WIKI_INTENT_TERMS,
+    WikiIndexer,
+)
 from app.llmwiki.prompts import (
     HYDE_PROMPT,
     PLANNER_PROMPT,
@@ -159,6 +166,27 @@ class AIHarness:
                 page_slugs=[],
                 confidence=1.0,
                 reason="Direct assistant mode requested.",
+                difficulty="easy",
+            )
+            traces.append(self._trace_decision(decision))
+            return HarnessPlan(
+                question=request.question,
+                retrieval_question=request.question,
+                decision=decision,
+                context="",
+                used_pages=[],
+                candidate_queries=[request.question],
+                traces=traces,
+            )
+
+        # Generic definition / world-knowledge questions should stay direct
+        # unless the user explicitly asks about uploaded/wiki/personal context.
+        if self._looks_like_general_direct_question(request.question):
+            decision = RouteDecision(
+                route="direct",
+                page_slugs=[],
+                confidence=0.95,
+                reason="General knowledge question; no wiki context requested.",
                 difficulty="easy",
             )
             traces.append(self._trace_decision(decision))
@@ -546,6 +574,26 @@ class AIHarness:
             "identity", "know", "profile", "resume", "skills", "tell", "who",
         }
         return bool((terms & first_person) and (terms & memory_terms))
+
+    @staticmethod
+    def _looks_like_general_direct_question(question: str) -> bool:
+        q = " ".join((question or "").lower().split())
+        if not q:
+            return False
+        terms = set(tokenize(q))
+        context_terms = WIKI_INTENT_TERMS | VAGUE_DOC_TERMS | SELF_PROFILE_TERMS | EXACT_EVIDENCE_TERMS
+        if terms & context_terms:
+            return False
+        starters = (
+            "what is ",
+            "what are ",
+            "who is ",
+            "who are ",
+            "define ",
+            "explain ",
+            "tell me about ",
+        )
+        return q.endswith("?") and q.startswith(starters) and len(terms) <= 8
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 

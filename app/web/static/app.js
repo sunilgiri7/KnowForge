@@ -171,6 +171,15 @@ const els = {
   llmProviderSelect: document.querySelector("#llmProviderSelect"),
   llmProviderLogo: document.querySelector("#llmProviderLogo"),
   llmApiKeyInput: document.querySelector("#llmApiKeyInput"),
+  llmApiKeyRow: document.querySelector("#llmApiKeyRow"),
+  llmAccessKeyInput: document.querySelector("#llmAccessKeyInput"),
+  llmAccessKeyRow: document.querySelector("#llmAccessKeyRow"),
+  llmSecretKeyInput: document.querySelector("#llmSecretKeyInput"),
+  llmSecretKeyRow: document.querySelector("#llmSecretKeyRow"),
+  llmBedrockOptionalRow: document.querySelector("#llmBedrockOptionalRow"),
+  llmBedrockRegionSelect: document.querySelector("#llmBedrockRegionSelect"),
+  llmBedrockInfoNote: document.querySelector("#llmBedrockInfoNote"),
+  llmModelOptionalNote: document.querySelector("#llmModelOptionalNote"),
   llmConnectBtn: document.querySelector("#llmConnectBtn"),
   llmDisconnectBtn: document.querySelector("#llmDisconnectBtn"),
   llmSaveModelBtn: document.querySelector("#llmSaveModelBtn"),
@@ -187,6 +196,8 @@ const PROVIDER_LOGOS = {
   openai: "https://cdn.jsdelivr.net/npm/simple-icons@latest/icons/openai.svg",
   anthropic: "https://cdn.simpleicons.org/anthropic",
   gemini: "https://cdn.simpleicons.org/googlegemini",
+  // AWS official smile logo (orange)
+  bedrock: "https://cdn.simpleicons.org/amazonaws/FF9900",
 };
 
 const PROVIDER_KEY_PLACEHOLDERS = {
@@ -194,6 +205,7 @@ const PROVIDER_KEY_PLACEHOLDERS = {
   openai: "Paste your OpenAI API key",
   anthropic: "Paste your Anthropic API key",
   gemini: "Paste your Gemini API key",
+  bedrock: "AWS Access Key ID (AKIA...)",
 };
 
 const PROVIDER_MODELS = {
@@ -238,14 +250,76 @@ const PROVIDER_MODELS = {
     { id: "gemini-3.1-flash-lite", label: "Gemini 3.1 Flash-Lite" },
     { id: "__custom__", label: "Custom model ID…" },
   ],
+  // Bedrock is dynamic — built per-region in buildBedrockModels()
+  bedrock: [],
 };
+
+/** Returns 'us', 'eu', or 'ap' inference profile prefix for a given AWS region. */
+function getBedrockRegionPrefix(region) {
+  if (!region) return "ap";
+  if (region.startsWith("eu-")) return "eu";
+  if (region.startsWith("ap-")) return "ap";
+  return "us"; // us-*, ca-*, sa-* all use US inference profiles
+}
+
+/**
+ * Builds the Bedrock model dropdown for a given region.
+ * Uses the correct inference profile prefix (us./eu./ap.) automatically.
+ */
+function buildBedrockModels(region) {
+  const p = getBedrockRegionPrefix(region);
+  const lbl = p.toUpperCase();
+
+  // Direct model IDs first. These are simpler than inference profiles and
+  // match the Bedrock model shape used elsewhere in the project.
+  const direct = [
+    { group: "Meta Llama (Direct)", id: "meta.llama3-70b-instruct-v1:0", label: "Llama 3 70B Instruct" },
+    { group: "Meta Llama (Direct)", id: "meta.llama3-8b-instruct-v1:0", label: "Llama 3 8B Instruct" },
+    { group: "Amazon Titan (Direct)", id: "amazon.titan-text-express-v1", label: "Titan Text Express" },
+    { group: "Amazon Titan (Direct)", id: "amazon.titan-text-lite-v1", label: "Titan Text Lite" },
+  ];
+
+  // Cross-region inference profile models (region/account dependent)
+  const crossRegion = [
+    { group: `Anthropic Claude (${lbl} Profile)`, id: `${p}.anthropic.claude-3-5-sonnet-20241022-v2:0`, label: "Claude 3.5 Sonnet" },
+    { group: `Anthropic Claude (${lbl} Profile)`, id: `${p}.anthropic.claude-3-5-haiku-20241022-v1:0`, label: "Claude 3.5 Haiku" },
+    { group: `Anthropic Claude (${lbl} Profile)`, id: `${p}.anthropic.claude-3-opus-20240229-v1:0`,      label: "Claude 3 Opus" },
+    { group: `Anthropic Claude (${lbl} Profile)`, id: `${p}.anthropic.claude-3-sonnet-20240229-v1:0`,    label: "Claude 3 Sonnet" },
+    { group: `Meta Llama (${lbl} Profile)`,        id: `${p}.meta.llama3-1-70b-instruct-v1:0`,           label: "Llama 3.1 70B" },
+    { group: `Meta Llama (${lbl} Profile)`,        id: `${p}.meta.llama3-1-8b-instruct-v1:0`,            label: "Llama 3.1 8B" },
+  ];
+
+  // US-only models (Nova, Llama 3.3/4, Mistral — not yet in EU/AP)
+  const usOnly = p === "us" ? [
+    { group: "Amazon Nova (US Profile)", id: "us.amazon.nova-pro-v1:0",                        label: "Nova Pro" },
+    { group: "Amazon Nova (US Profile)", id: "us.amazon.nova-lite-v1:0",                       label: "Nova Lite" },
+    { group: "Amazon Nova (US Profile)", id: "us.amazon.nova-micro-v1:0",                      label: "Nova Micro" },
+    { group: "Meta Llama (US Profile)",  id: "us.meta.llama3-3-70b-instruct-v1:0",             label: "Llama 3.3 70B" },
+    { group: "Meta Llama (US Profile)",  id: "us.meta.llama4-maverick-17b-instruct-v1:0",      label: "Llama 4 Maverick 17B" },
+    { group: "Meta Llama (US Profile)",  id: "us.meta.llama4-scout-17b-instruct-v1:0",         label: "Llama 4 Scout 17B" },
+    { group: "Mistral AI (US Profile)",  id: "us.mistral.mistral-large-2402-v1:0",             label: "Mistral Large" },
+    { group: "Mistral AI (US Profile)",  id: "us.mistral.mixtral-8x7b-instruct-v0:1",          label: "Mixtral 8x7B" },
+  ] : [];
+
+  const custom = [
+    { group: "Custom", id: "__custom__", label: "Custom model ID..." },
+  ];
+
+  return [...direct, ...crossRegion, ...usOnly, ...custom];
+}
 
 function updateProviderLogo() {
   const provider = els.llmProviderSelect.value;
   const src = PROVIDER_LOGOS[provider] || "";
   if (els.llmProviderLogo) {
-    els.llmProviderLogo.src = src;
-    els.llmProviderLogo.alt = `${provider} logo`;
+    if (provider === "bedrock") {
+      // Use inline SVG data URI for crisp AWS logo — avoids CORS/simpleicons caching issues
+      els.llmProviderLogo.src = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%23FF9900' d='M13.234 15.945L12 16.806l-1.234-.861V13.08l1.234-.86 1.234.86v2.865zM3.798 10.435l1.234.86v2.867l-1.234.86-1.234-.86v-2.867l1.234-.86zm0-4.435l1.234.86v2.866l-1.234.86-1.234-.86V6.86l1.234-.86zM12 0L1.386 6v12L12 24l10.614-6V6L12 0zm8.202 10.435l1.234.86v2.867l-1.234.86-1.234-.86v-2.867l1.234-.86zm-8.202 5.51l-1.234-.86V12.22L12 11.36l1.234.86v2.866L12 15.945zm1.234-8.36L12 8.445 10.766 7.584V4.72L12 3.86l1.234.86v2.865zM5.035 16.806l1.234-.861V13.08l-1.234-.86-1.233.86v2.865l1.233.861zm13.93 0l1.233-.861V13.08l-1.233-.86-1.234.86v2.865l1.234.861z'/%3E%3C/svg%3E";
+      els.llmProviderLogo.alt = "AWS Bedrock logo";
+    } else {
+      els.llmProviderLogo.src = src;
+      els.llmProviderLogo.alt = `${provider} logo`;
+    }
   }
 }
 
@@ -255,8 +329,25 @@ function updateApiKeyPlaceholder() {
   if (els.llmApiKeyInput) els.llmApiKeyInput.placeholder = placeholder;
 }
 
+/** Toggle visibility of Bedrock-specific vs standard credential fields. */
+function updateBedrockFieldVisibility() {
+  const isBedrock = els.llmProviderSelect.value === "bedrock";
+  // Standard API key row — hide for Bedrock
+  if (els.llmApiKeyRow) els.llmApiKeyRow.hidden = isBedrock;
+  // Bedrock-specific credential rows
+  if (els.llmAccessKeyRow) els.llmAccessKeyRow.hidden = !isBedrock;
+  if (els.llmSecretKeyRow) els.llmSecretKeyRow.hidden = !isBedrock;
+  if (els.llmBedrockOptionalRow) els.llmBedrockOptionalRow.hidden = !isBedrock;
+  if (els.llmBedrockInfoNote) els.llmBedrockInfoNote.hidden = !isBedrock;
+  // Show the optional note on model label for bedrock
+  if (els.llmModelOptionalNote) els.llmModelOptionalNote.hidden = !isBedrock;
+}
+
 function updateModelOptions({ provider, selectedModel }) {
-  const models = PROVIDER_MODELS[provider] || [];
+  // For Bedrock: build model list dynamically based on the selected region
+  const models = provider === "bedrock"
+    ? buildBedrockModels(els.llmBedrockRegionSelect?.value || "us-east-1")
+    : (PROVIDER_MODELS[provider] || []);
   els.llmModelSelect.innerHTML = "";
   const hasGroups = models.some((m) => m.group);
   if (hasGroups) {
@@ -327,13 +418,23 @@ function updateServiceStatus(apiOk = true, errorMsg = "") {
   }
 }
 
+
+
 function setLlmUi({ connected, provider }) {
   els.llmError.hidden = true;
   els.llmError.textContent = "";
   els.llmDisconnectBtn.disabled = !connected;
   els.llmConnectBtn.disabled = connected;
   els.llmProviderSelect.disabled = connected;
-  els.llmApiKeyInput.disabled = connected;
+  // Disable credential inputs based on provider type
+  const isBedrock = provider === "bedrock";
+  if (isBedrock) {
+    if (els.llmAccessKeyInput) els.llmAccessKeyInput.disabled = connected;
+    if (els.llmSecretKeyInput) els.llmSecretKeyInput.disabled = connected;
+    if (els.llmBedrockRegionSelect) els.llmBedrockRegionSelect.disabled = connected;
+  } else {
+    els.llmApiKeyInput.disabled = connected;
+  }
   els.llmSaveModelBtn.disabled = !connected;
   els.llmStatusPill.textContent = connected ? `Connected (${provider})` : "Not connected";
   els.llmStatusPill.classList.toggle("muted", !connected);
@@ -341,7 +442,9 @@ function setLlmUi({ connected, provider }) {
   els.llmStatusPill.classList.toggle("disconnected", !connected);
   updateProviderLogo();
   updateApiKeyPlaceholder();
+  updateBedrockFieldVisibility();
 }
+
 
 async function loadLlmStatus(options = {}) {
   const { preferActiveProvider = false } = options;
@@ -2289,6 +2392,7 @@ function bindEvents() {
     state.llmProviderTouched = true;
     updateProviderLogo();
     updateApiKeyPlaceholder();
+    updateBedrockFieldVisibility();
     updateModelOptions({ provider: els.llmProviderSelect.value, selectedModel: "" });
     await loadLlmStatus({ preferActiveProvider: false });
   });
@@ -2299,32 +2403,80 @@ function bindEvents() {
     if (custom) els.llmCustomModelInput.focus();
   });
 
+  // Rebuild model list when region changes (Bedrock-specific)
+  if (els.llmBedrockRegionSelect) {
+    els.llmBedrockRegionSelect.addEventListener("change", () => {
+      if (els.llmProviderSelect.value === "bedrock") {
+        updateModelOptions({ provider: "bedrock", selectedModel: "" });
+      }
+    });
+  }
+
   els.llmConnectBtn.addEventListener("click", async () => {
     const provider = els.llmProviderSelect.value;
-    const apiKey = els.llmApiKeyInput.value.trim();
-    const model = els.llmModelSelect.value === "__custom__"
-      ? els.llmCustomModelInput.value.trim()
-      : els.llmModelSelect.value;
+    const isBedrock = provider === "bedrock";
     els.llmError.hidden = true;
-    if (!apiKey) {
-      els.llmError.textContent = "API key is required.";
-      els.llmError.hidden = false;
-      return;
+
+    let requestBody;
+    if (isBedrock) {
+      // Bedrock: two credential fields
+      const accessKeyId = (els.llmAccessKeyInput?.value || "").trim();
+      const secretKey = (els.llmSecretKeyInput?.value || "").trim();
+      const region = els.llmBedrockRegionSelect?.value || "us-east-1";
+      const model = els.llmModelSelect.value === "__custom__"
+        ? els.llmCustomModelInput.value.trim()
+        : els.llmModelSelect.value;
+      if (!accessKeyId) {
+        els.llmError.textContent = "AWS Access Key ID is required.";
+        els.llmError.hidden = false;
+        return;
+      }
+      if (!secretKey) {
+        els.llmError.textContent = "AWS Secret Access Key is required.";
+        els.llmError.hidden = false;
+        return;
+      }
+      requestBody = {
+        provider,
+        api_key: accessKeyId,
+        aws_secret_access_key: secretKey,
+        aws_region: region,
+        model: model || "meta.llama3-70b-instruct-v1:0",
+      };
+    } else {
+      // Standard providers
+      const apiKey = els.llmApiKeyInput.value.trim();
+      const model = els.llmModelSelect.value === "__custom__"
+        ? els.llmCustomModelInput.value.trim()
+        : els.llmModelSelect.value;
+      if (!apiKey) {
+        els.llmError.textContent = "API key is required.";
+        els.llmError.hidden = false;
+        return;
+      }
+      if (!model) {
+        els.llmError.textContent = "Model is required.";
+        els.llmError.hidden = false;
+        return;
+      }
+      requestBody = { provider, api_key: apiKey, model };
     }
-    if (!model) {
-      els.llmError.textContent = "Model is required.";
-      els.llmError.hidden = false;
-      return;
-    }
+
     setButtonLoading(els.llmConnectBtn, true, "Connecting...");
     try {
       await apiFetch(API.llmKeys, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ provider, api_key: apiKey, model }),
+        body: JSON.stringify(requestBody),
         timeout: 45000,
       });
-      els.llmApiKeyInput.value = "";
+      // Clear sensitive inputs
+      if (isBedrock) {
+        if (els.llmAccessKeyInput) els.llmAccessKeyInput.value = "";
+        if (els.llmSecretKeyInput) els.llmSecretKeyInput.value = "";
+      } else {
+        els.llmApiKeyInput.value = "";
+      }
       toast("LLM provider connected.");
       await loadLlmStatus();
     } catch (error) {

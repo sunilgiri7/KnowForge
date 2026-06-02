@@ -2016,6 +2016,59 @@ body.resizing-sidebar {
   margin-top: 8px;
 }
 
+/* AWS Bedrock specific field styling */
+.llm-bedrock-row {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+}
+
+.llm-label-half {
+  display: grid;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.llm-field-required {
+  color: var(--danger);
+  font-weight: 700;
+  font-size: 13px;
+  margin-left: 2px;
+  display: inline;
+  vertical-align: baseline;
+}
+
+.llm-field-optional {
+  color: var(--muted);
+  font-weight: 400;
+  font-size: 11px;
+  margin-left: 4px;
+  display: inline;
+  vertical-align: baseline;
+}
+
+/* Bedrock provider info note */
+.llm-bedrock-info {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 14px;
+  background: rgba(255, 153, 0, 0.08);
+  border: 1px solid rgba(255, 153, 0, 0.25);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  color: #854d0e;
+  line-height: 1.5;
+}
+
+.llm-bedrock-info svg {
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+
 .secondary-button {
   padding: 8px 14px;
   border: 1px solid var(--line);
