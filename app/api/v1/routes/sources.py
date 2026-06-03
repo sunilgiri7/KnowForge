@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import uuid
 from datetime import UTC, datetime
 from typing import Annotated, Any
@@ -10,10 +11,11 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, wiki_store_for_workspace, get_active_workspace_dep
 from app.core.errors import KnowForgeError
-from app.db.models import User, Workspace
+from app.db.models import ResearchAnalysisJob, ResearchPaper, User, Workspace
 from app.db.session import SessionLocal, get_db
 from app.llmwiki.ingest import SourceIngestor
 from app.llmwiki.temporal import SupersessionDetector, TemporalFactExtractor, WikiVersionLedger
+from app.llmwiki.text import slugify
 from app.schemas.llmwiki import SourceUploadResponse
 from app.services.llm_factory import build_user_llm
 from app.services.workspace import get_member, require_role
@@ -46,6 +48,7 @@ async def run_research_pipeline_bg(
     user_id: str,
     force_research: bool = False,
     upload_id: str | None = None,
+    paper_id: str | None = None,
 ):
     from app.llmwiki.research import ResearchPaperAnalyzer
 
@@ -65,13 +68,64 @@ async def run_research_pipeline_bg(
             slug=slug,
             file_path=file_path,
             force_research=force_research,
+            paper_id=paper_id,
         )
     except Exception as e:
         print(f"[Research Ingest BG Error]: {e}")
         if upload_id:
             _set_upload_job(upload_id, research_error=str(e))
+        if paper_id:
+            _mark_research_job_failed(paper_id, str(e))
     finally:
         db.close()
+
+
+def _mark_research_job_failed(paper_id: str, error: str) -> None:
+    db = SessionLocal()
+    try:
+        job = db.query(ResearchAnalysisJob).filter_by(paper_id=paper_id).first()
+        if job:
+            job.status = "failed"
+            job.error_message = error[:1000]
+            job.completed_at = datetime.now(UTC)
+            db.commit()
+    finally:
+        db.close()
+
+
+def _create_pending_research_paper(
+    *,
+    db: Session,
+    workspace_id: str,
+    filename: str,
+    source_id: str,
+    file_path: str | None,
+) -> ResearchPaper:
+    title = filename.rsplit(".", 1)[0].replace("_", " ").replace("-", " ").title()
+    paper = ResearchPaper(
+        workspace_id=workspace_id,
+        title=title,
+        authors=json.dumps([]),
+        slug=slugify(source_id),
+        file_path=file_path,
+        abstract="Queued for research analysis.",
+    )
+    db.add(paper)
+    db.commit()
+    db.refresh(paper)
+
+    job = ResearchAnalysisJob(
+        workspace_id=workspace_id,
+        paper_id=paper.id,
+        status="pending",
+    )
+    db.add(job)
+    db.commit()
+    return paper
+
+
+def _run_upload_worker_sync(**kwargs: Any) -> None:
+    asyncio.run(process_upload_bg(**kwargs))
 
 
 async def process_upload_bg(
@@ -84,6 +138,7 @@ async def process_upload_bg(
     text: str,
     compile_wiki: bool,
     force_research: bool,
+    research_paper_id: str | None = None,
 ) -> None:
     db = SessionLocal()
     try:
@@ -147,17 +202,32 @@ async def process_upload_bg(
             )
 
             if force_research:
-                source_path = str(store.page_path(page_slug))
+                source_path = str(store.source_dir(source_id) / filename)
                 await run_research_pipeline_bg(
                     workspace_id=workspace.id,
                     filename=filename,
-                    text=page.content,
+                    text=text,
                     slug=page.meta.slug,
                     file_path=source_path,
                     user_id=user.id,
                     force_research=force_research,
                     upload_id=upload_id,
+                    paper_id=research_paper_id,
                 )
+        elif force_research:
+            source_path = str(store.source_dir(source_id) / filename)
+            _set_upload_job(upload_id, status="processing", phase="research", message="Analyzing research metadata and claims...")
+            await run_research_pipeline_bg(
+                workspace_id=workspace.id,
+                filename=filename,
+                text=text,
+                slug=slugify(source_id),
+                file_path=source_path,
+                user_id=user.id,
+                force_research=force_research,
+                upload_id=upload_id,
+                paper_id=research_paper_id,
+            )
 
         _set_upload_job(
             upload_id,
@@ -177,6 +247,8 @@ async def process_upload_bg(
             message="Upload processing failed.",
             completed_at=_now_iso(),
         )
+        if research_paper_id:
+            _mark_research_job_failed(research_paper_id, str(exc))
     finally:
         db.close()
 
@@ -209,24 +281,37 @@ async def upload_pdf(
     store = wiki_store_for_workspace(workspace)
     source_id = store.source_id_for_bytes(file.filename, data)
     store.save_source(source_id, file.filename, data, text)
+    research_paper_id = None
+    if force_research:
+        source_pdf_path = str(store.source_dir(source_id) / file.filename)
+        paper = _create_pending_research_paper(
+            db=db,
+            workspace_id=workspace.id,
+            filename=file.filename,
+            source_id=source_id,
+            file_path=source_pdf_path,
+        )
+        research_paper_id = paper.id
 
     upload_id = str(uuid.uuid4())
-    initial_status = "processing" if compile_wiki else "completed"
+    initial_status = "processing" if compile_wiki or force_research else "completed"
+    initial_message = "PDF saved. Processing has started." if initial_status == "processing" else "PDF ingested."
     _set_upload_job(
         upload_id,
         status=initial_status,
-        phase="queued" if compile_wiki else "done",
+        phase="queued" if initial_status == "processing" else "done",
         filename=file.filename,
         source_id=source_id,
         bytes_received=len(data),
         text_chars=len(text),
         wiki_page_slug=None,
-        message="PDF saved. Wiki processing has started." if compile_wiki else "PDF ingested.",
+        message=initial_message,
     )
 
     if compile_wiki:
         asyncio.create_task(
-            process_upload_bg(
+            asyncio.to_thread(
+                _run_upload_worker_sync,
                 upload_id=upload_id,
                 workspace_id=workspace.id,
                 user_id=user.id,
@@ -235,6 +320,22 @@ async def upload_pdf(
                 text=text,
                 compile_wiki=compile_wiki,
                 force_research=force_research,
+                research_paper_id=research_paper_id,
+            )
+        )
+    elif force_research:
+        asyncio.create_task(
+            asyncio.to_thread(
+                _run_upload_worker_sync,
+                upload_id=upload_id,
+                workspace_id=workspace.id,
+                user_id=user.id,
+                source_id=source_id,
+                filename=file.filename,
+                text=text,
+                compile_wiki=False,
+                force_research=True,
+                research_paper_id=research_paper_id,
             )
         )
 
@@ -244,7 +345,7 @@ async def upload_pdf(
         bytes_received=len(data),
         text_chars=len(text),
         wiki_page_slug=None,
-        message="PDF saved. Wiki processing has started." if compile_wiki else "PDF ingested.",
+        message=initial_message,
         status=initial_status,
         upload_id=upload_id,
     )

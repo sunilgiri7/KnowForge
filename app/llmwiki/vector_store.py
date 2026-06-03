@@ -233,6 +233,9 @@ class VectorStore:
         try:
             index.delete(ids=ids, namespace=self._namespace)
         except Exception as exc:
+            if "Namespace not found" in str(exc):
+                logger.info("Pinecone namespace %s did not exist during delete; skipping.", self._namespace)
+                return
             logger.warning("Pinecone delete failed: %s", exc)
 
     # ── Read operations ───────────────────────────────────────────────────────

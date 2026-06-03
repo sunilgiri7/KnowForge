@@ -86,6 +86,15 @@ class Settings(BaseSettings):
 
     openrouter_default_model: str = "openai/gpt-4o-mini"
 
+    # ── Web Search / External Research ───────────────────────────────────────
+    tavily_api_key: str | None = None
+    tavily_search_url: str = "https://api.tavily.com/search"
+    tavily_search_depth: str = "advanced"
+    web_search_timeout_seconds: float = 20.0
+    web_search_max_results: int = 5
+    web_search_context_chars: int = 7_000
+    tavily_extract_url: str = "https://api.tavily.com/extract"
+
     # ── Pinecone / Vector Search (optional) ──────────────────────────────────
     # When set, KnowForge enables hybrid retrieval (BM25 + semantic vectors).
     # Leave blank to run in pure BM25 mode — the system degrades gracefully.

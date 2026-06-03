@@ -37,6 +37,7 @@ from app.llmwiki.prompts import (
 from app.llmwiki.storage import WikiStore
 from app.llmwiki.text import safe_format, tokenize, trim_to_chars
 from app.schemas.llmwiki import AgentTrace, ChatRequest, RouteDecision
+from app.services.web_search import normalize_web_search_mode, should_bypass_wiki_for_web
 
 
 @dataclass
@@ -168,6 +169,35 @@ class AIHarness:
                 reason="Direct assistant mode requested.",
                 difficulty="easy",
             )
+            traces.append(self._trace_decision(decision))
+            return HarnessPlan(
+                question=request.question,
+                retrieval_question=request.question,
+                decision=decision,
+                context="",
+                used_pages=[],
+                candidate_queries=[request.question],
+                traces=traces,
+            )
+
+        bypass_wiki, bypass_reason = should_bypass_wiki_for_web(
+            request.question,
+            mode=normalize_web_search_mode(request.web_search_mode),
+        )
+        if bypass_wiki:
+            decision = RouteDecision(
+                route="direct",
+                page_slugs=[],
+                confidence=0.96,
+                reason=bypass_reason,
+                difficulty=self.indexer.classify_difficulty(request.question, []),
+            )
+            traces.append(AgentTrace(
+                agent="web_router",
+                action="bypassed_wiki",
+                confidence=decision.confidence,
+                notes=bypass_reason,
+            ))
             traces.append(self._trace_decision(decision))
             return HarnessPlan(
                 question=request.question,

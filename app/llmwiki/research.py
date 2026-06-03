@@ -75,7 +75,8 @@ class ResearchPaperAnalyzer:
         text: str,
         slug: str,
         file_path: str | None = None,
-        force_research: bool = False
+        force_research: bool = False,
+        paper_id: str | None = None,
     ) -> bool:
         """
         Orchestrates classification, section parsing, methodology extraction, claim identification,
@@ -123,33 +124,69 @@ class ResearchPaperAnalyzer:
 
         if not is_research:
             print(f"[Research Intelligence] File {filename} classified as non-research.")
+            if paper_id:
+                job = self.db.query(ResearchAnalysisJob).filter_by(paper_id=paper_id).first()
+                if job:
+                    job.status = "failed"
+                    job.error_message = "Document was not classified as a research paper."
+                    job.completed_at = datetime.now(UTC)
+                    self.db.commit()
             return False
 
-        # Create paper record
-        paper = ResearchPaper(
-            workspace_id=workspace_id,
-            title=title,
-            authors=json.dumps(authors),
-            venue=venue,
-            doi=doi,
-            publication_year=pub_year,
-            abstract=abstract,
-            slug=slug,
-            file_path=file_path
-        )
-        self.db.add(paper)
+        # Create or update the paper record. Research-tab uploads create a
+        # pending shell immediately so the UI can show progress while analysis runs.
+        paper = self.db.get(ResearchPaper, paper_id) if paper_id else None
+        if not paper:
+            paper = self.db.query(ResearchPaper).filter_by(workspace_id=workspace_id, slug=slug).first()
+        if paper:
+            paper.title = title
+            paper.authors = json.dumps(authors)
+            paper.venue = venue
+            paper.doi = doi
+            paper.publication_year = pub_year
+            paper.abstract = abstract
+            paper.slug = slug
+            paper.file_path = file_path or paper.file_path
+        else:
+            paper = ResearchPaper(
+                workspace_id=workspace_id,
+                title=title,
+                authors=json.dumps(authors),
+                venue=venue,
+                doi=doi,
+                publication_year=pub_year,
+                abstract=abstract,
+                slug=slug,
+                file_path=file_path
+            )
+            self.db.add(paper)
         self.db.commit()
         self.db.refresh(paper)
 
-        # Create tracking job
-        job = ResearchAnalysisJob(
-            workspace_id=workspace_id,
-            paper_id=paper.id,
-            status="processing"
-        )
-        self.db.add(job)
+        # Create or update tracking job
+        job = self.db.query(ResearchAnalysisJob).filter_by(paper_id=paper.id).first()
+        if job:
+            job.status = "processing"
+            job.error_message = None
+            job.completed_at = None
+        else:
+            job = ResearchAnalysisJob(
+                workspace_id=workspace_id,
+                paper_id=paper.id,
+                status="processing"
+            )
+            self.db.add(job)
         self.db.commit()
         self.db.refresh(job)
+
+        self.db.query(ResearchPaperSection).filter_by(paper_id=paper.id).delete()
+        self.db.query(ResearchMethod).filter_by(paper_id=paper.id).delete()
+        self.db.query(ResearchClaim).filter_by(paper_id=paper.id).delete()
+        self.db.query(ResearchPaperEdge).filter(
+            (ResearchPaperEdge.source_paper_id == paper.id) |
+            (ResearchPaperEdge.target_paper_id == paper.id)
+        ).delete()
+        self.db.commit()
 
         # 2. Parse sections heuristically
         try:

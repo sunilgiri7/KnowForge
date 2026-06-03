@@ -123,6 +123,7 @@ class ChatRequest(BaseModel):
     interaction: Literal["message", "reply", "comment"] = "message"
     context_page_slugs: list[str] = Field(default_factory=list, max_length=8)
     intent: Literal["auto", "wiki", "direct"] = "auto"
+    web_search_mode: Literal["auto", "force", "disabled"] = "auto"
     generate_report: bool = False
 
 

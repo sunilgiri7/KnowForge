@@ -29,6 +29,7 @@ const THINKING_STEPS = [
   "Understanding your question",
   "Rewriting vague references",
   "Checking your wiki memory",
+  "Checking current web sources",
   "Selecting the best document context",
   "Asking the answer agent",
   "Verifying support and citations",
@@ -67,6 +68,7 @@ const state = {
   sidebarResizing: false,
   llmProviderTouched: false,
   reportModeActive: false,
+  webSearchActive: false,
   llmKeysConnected: false,
 };
 
@@ -91,6 +93,7 @@ const els = {
   messageInput: document.querySelector("#messageInput"),
   sendBtn: document.querySelector("#sendBtn"),
   chatReportModeBtn: document.querySelector("#chatReportModeBtn"),
+  chatWebSearchBtn: document.querySelector("#chatWebSearchBtn"),
   template: document.querySelector("#messageTemplate"),
   replyBanner: document.querySelector("#replyBanner"),
   replyLabel: document.querySelector("#replyLabel"),
@@ -617,7 +620,7 @@ function renderInlineMarkdown(value) {
     .replace(/`([^`]+)`/g, "<code>$1</code>")
     .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
     .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>')
-    .replace(/\[(wiki|source):([^\]]+)\]/g, '<span class="message-chip">$1:$2</span>');
+    .replace(/\[(wiki|source|web):([^\]]+)\]/g, '<span class="message-chip">$1:$2</span>');
 }
 
 function renderMarkdownBlock(block) {
@@ -829,6 +832,7 @@ async function sendMessage(content, options = {}) {
   startThinking(assistantId);
 
   const generateReport = !!state.reportModeActive;
+  const webSearchMode = state.webSearchActive ? "force" : "auto";
   if (state.reportModeActive) {
     state.reportModeActive = false;
     updateReportModeUI();
@@ -857,6 +861,7 @@ async function sendMessage(content, options = {}) {
         context_page_slugs: contextPageSlugs,
         intent: wikiIntent,
         allow_fallback: true,
+        web_search_mode: webSearchMode,
         generate_report: generateReport,
       }),
     });
@@ -1254,7 +1259,7 @@ function buildRetrievalInsight(message) {
       notes.textContent = trace.notes;
       li.appendChild(notes);
     }
-    if (trace.agent === "knowledge_graph" || trace.agent === "planner") {
+    if (trace.agent === "knowledge_graph" || trace.agent === "planner" || trace.agent === "web_search") {
       li.classList.add("trace-highlight");
     }
     list.appendChild(li);
@@ -2291,6 +2296,10 @@ function bindEvents() {
     state.reportModeActive = !state.reportModeActive;
     updateReportModeUI();
   });
+  els.chatWebSearchBtn?.addEventListener("click", () => {
+    state.webSearchActive = !state.webSearchActive;
+    updateWebSearchUI();
+  });
 
   els.messageInput.addEventListener("keydown", (event) => {
     if (event.key === "Enter" && !event.shiftKey) {
@@ -2571,6 +2580,16 @@ function updateReportModeUI() {
   } else {
     els.chatReportModeBtn?.classList.remove("active");
     els.messageInput.placeholder = "Ask KnowForge, reply to a message, or continue a thread...";
+  }
+}
+
+function updateWebSearchUI() {
+  if (state.webSearchActive) {
+    els.chatWebSearchBtn?.classList.add("active");
+    els.chatWebSearchBtn?.setAttribute("aria-pressed", "true");
+  } else {
+    els.chatWebSearchBtn?.classList.remove("active");
+    els.chatWebSearchBtn?.setAttribute("aria-pressed", "false");
   }
 }
 
@@ -3194,7 +3213,9 @@ loadWorkspaces();
       renderResearchPapers();
       renderResearchDashboard();
       renderGraphPreview();
-      if (researchState.activePaperId && (!researchState.activePaperDetails || researchState.activePaperDetails.id !== researchState.activePaperId)) {
+      const activePaper = researchState.papers.find((paper) => paper.id === researchState.activePaperId);
+      const activeStatusChanged = activePaper && researchState.activePaperDetails && activePaper.status !== researchState.activePaperDetails.status;
+      if (researchState.activePaperId && (!researchState.activePaperDetails || researchState.activePaperDetails.id !== researchState.activePaperId || activeStatusChanged)) {
         await loadPaperDetails(researchState.activePaperId, { openModal: false });
       }
 
