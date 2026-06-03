@@ -26,9 +26,9 @@ Namespaced queries are strictly scoped — workspace A never sees workspace B.
 
 Graceful-off design
 -------------------
-If PINECONE_API_KEY is not set, every method is a safe no-op that returns
-empty results. BM25 continues working — this class just adds the semantic
-layer on top.
+If semantic vector search is not explicitly enabled, or PINECONE_API_KEY is not
+set, every method is a safe no-op that returns empty results. BM25 continues
+working — this class just adds the semantic layer on top.
 """
 from __future__ import annotations
 
@@ -62,6 +62,8 @@ def _get_pinecone() -> Any:
     global _pc_client
     if _pc_client is not None:
         return _pc_client
+    if not settings.enable_semantic_vector_search:
+        return None
     api_key = settings.pinecone_api_key
     if not api_key:
         return None
@@ -90,7 +92,7 @@ def _get_index() -> Any:
 
 @property
 def _available() -> bool:
-    return bool(settings.pinecone_api_key)
+    return bool(settings.enable_semantic_vector_search and settings.pinecone_api_key)
 
 
 # ── Text chunking ─────────────────────────────────────────────────────────────
@@ -153,7 +155,7 @@ class VectorStore:
 
     @property
     def available(self) -> bool:
-        return bool(settings.pinecone_api_key)
+        return bool(settings.enable_semantic_vector_search and settings.pinecone_api_key)
 
     # ── Write operations ──────────────────────────────────────────────────────
 

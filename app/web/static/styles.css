@@ -1694,6 +1694,18 @@ body.resizing-sidebar {
   flex-shrink: 0;
 }
 
+.wiki-page-item.upload-pending {
+  opacity: 0.92;
+}
+
+.upload-pending-row {
+  cursor: default;
+}
+
+.wiki-upload-spinner {
+  margin-left: 2px;
+}
+
 .agent-thinking ol {
   display: grid;
   gap: 8px;

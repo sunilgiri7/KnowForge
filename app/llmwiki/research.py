@@ -15,6 +15,30 @@ from app.db.models import (
 from app.llmwiki.groq import GroqClient
 from app.llmwiki.text import safe_format, trim_to_chars
 
+MAX_RESEARCH_SECTIONS = 32
+MAX_SECTION_CONTENT_CHARS = 12_000
+MAX_SECTION_HEADING_CHARS = 180
+MAX_RESEARCH_TEXT_FIELD_CHARS = 8_000
+
+
+def _db_text(value: object, *, max_chars: int = MAX_RESEARCH_TEXT_FIELD_CHARS) -> str:
+    text = "" if value is None else str(value)
+    # PostgreSQL rejects NUL bytes; other invisible control chars make PDF
+    # extraction noisy and can break downstream rendering. Keep normal
+    # whitespace and printable unicode.
+    text = text.replace("\x00", "")
+    text = re.sub(r"[\x01-\x08\x0b\x0c\x0e-\x1f\x7f]", " ", text)
+    text = re.sub(r"[ \t]{2,}", " ", text)
+    text = re.sub(r"\n{4,}", "\n\n\n", text)
+    return trim_to_chars(text.strip(), max_chars)
+
+
+def _json_list(value: object, *, max_items: int = 12, item_chars: int = 120) -> str:
+    if not isinstance(value, list):
+        return json.dumps([])
+    cleaned = [_db_text(item, max_chars=item_chars) for item in value if _db_text(item, max_chars=item_chars)]
+    return json.dumps(cleaned[:max_items])
+
 # Prompt to classify and extract academic metadata from the first 2-3 pages of a document
 CLASSIFY_PAPER_PROMPT = """You are an expert academic metadata extractor. Analyze the following document excerpt (from the first few pages) and determine if it is a scientific research paper, journal article, conference proceeding, preprint, or thesis.
 
@@ -62,6 +86,29 @@ Output a JSON object with the following structure:
 """
 
 
+def _publication_year(value: object) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, int):
+        return value if 1800 <= value <= 2200 else None
+    match = re.search(r"\b(18\d{2}|19\d{2}|20\d{2}|21\d{2}|2200)\b", str(value))
+    if not match:
+        return None
+    year = int(match.group(1))
+    return year if 1800 <= year <= 2200 else None
+
+
+def _normalize_claim_category(value: object) -> str:
+    category = _db_text(value, max_chars=40).lower() or "finding"
+    return category if category in {"finding", "limitation", "hypothesis", "gap"} else "finding"
+
+
+def _normalize_grounding(value: object, *, default: str = "fully_supported") -> str:
+    grounding = _db_text(value, max_chars=40).lower() or default
+    allowed = {"fully_supported", "partially_supported", "unsupported"}
+    return grounding if grounding in allowed else default
+
+
 class ResearchPaperAnalyzer:
     def __init__(self, db: Session, llm: GroqClient | None = None):
         self.db = db
@@ -102,12 +149,12 @@ class ResearchPaperAnalyzer:
             is_research_detected = metadata.get("is_research_paper", False)
             if force_research or is_research_detected:
                 is_research = True
-                title = (metadata.get("title") or "").strip() or title
+                title = _db_text((metadata.get("title") or "").strip() or title, max_chars=240)
                 authors = metadata.get("authors") or []
-                venue = metadata.get("venue")
-                doi = metadata.get("doi")
-                pub_year = metadata.get("publication_year")
-                abstract = metadata.get("abstract")
+                venue = _db_text(metadata.get("venue"), max_chars=240) or None
+                doi = _db_text(metadata.get("doi"), max_chars=100) or None
+                pub_year = _publication_year(metadata.get("publication_year"))
+                abstract = _db_text(metadata.get("abstract"), max_chars=4000) or None
         except Exception as exc:
             print(f"[Research Intelligence] LLM metadata extraction failed: {exc}. Falling back to heuristics.")
             # Heuristic checks for academic paper properties
@@ -139,24 +186,24 @@ class ResearchPaperAnalyzer:
         if not paper:
             paper = self.db.query(ResearchPaper).filter_by(workspace_id=workspace_id, slug=slug).first()
         if paper:
-            paper.title = title
-            paper.authors = json.dumps(authors)
-            paper.venue = venue
-            paper.doi = doi
-            paper.publication_year = pub_year
-            paper.abstract = abstract
-            paper.slug = slug
+            paper.title = _db_text(title, max_chars=240)
+            paper.authors = _json_list(authors)
+            paper.venue = _db_text(venue, max_chars=240) or None
+            paper.doi = _db_text(doi, max_chars=100) or None
+            paper.publication_year = _publication_year(pub_year)
+            paper.abstract = _db_text(abstract, max_chars=4000) or None
+            paper.slug = _db_text(slug, max_chars=240)
             paper.file_path = file_path or paper.file_path
         else:
             paper = ResearchPaper(
                 workspace_id=workspace_id,
-                title=title,
-                authors=json.dumps(authors),
-                venue=venue,
-                doi=doi,
-                publication_year=pub_year,
-                abstract=abstract,
-                slug=slug,
+                title=_db_text(title, max_chars=240),
+                authors=_json_list(authors),
+                venue=_db_text(venue, max_chars=240) or None,
+                doi=_db_text(doi, max_chars=100) or None,
+                publication_year=_publication_year(pub_year),
+                abstract=_db_text(abstract, max_chars=4000) or None,
+                slug=_db_text(slug, max_chars=240),
                 file_path=file_path
             )
             self.db.add(paper)
@@ -188,19 +235,23 @@ class ResearchPaperAnalyzer:
         ).delete()
         self.db.commit()
 
-        # 2. Parse sections heuristically
+        # 2. Parse sections heuristically. This must never poison the session:
+        # large/noisy PDFs can contain NUL bytes, huge references, or repeated
+        # benchmark tables that exceed practical DB/rendering limits.
         try:
-            sections = self.parse_sections_heuristically(text)
-            for idx, sec in enumerate(sections):
+            sections = self.parse_sections_heuristically(text)[:MAX_RESEARCH_SECTIONS]
+            for sec in sections:
                 db_sec = ResearchPaperSection(
                     paper_id=paper.id,
-                    heading=sec["heading"],
-                    content=sec["content"],
-                    section_type=sec["section_type"]
+                    heading=_db_text(sec.get("heading") or "Section", max_chars=MAX_SECTION_HEADING_CHARS) or "Section",
+                    content=_db_text(sec.get("content") or "", max_chars=MAX_SECTION_CONTENT_CHARS),
+                    section_type=_db_text(sec.get("section_type") or "other", max_chars=40) or "other",
                 )
-                self.db.add(db_sec)
+                if db_sec.content:
+                    self.db.add(db_sec)
             self.db.commit()
         except Exception as sec_exc:
+            self.db.rollback()
             print(f"[Research Intelligence] Section parsing failed: {sec_exc}")
 
         try:
@@ -214,31 +265,31 @@ class ResearchPaperAnalyzer:
             # Persist methods
             methods_list = details.get("methods") or []
             for item in methods_list:
-                method_name = (item.get("name") or "").strip()
+                method_name = _db_text(item.get("name"), max_chars=120)
                 if not method_name:
                     continue
                 db_method = ResearchMethod(
                     workspace_id=workspace_id,
                     paper_id=paper.id,
                     name=method_name,
-                    description=(item.get("description") or "").strip(),
-                    dataset_used=item.get("dataset_used")
+                    description=_db_text(item.get("description"), max_chars=1200) or "No description extracted.",
+                    dataset_used=_db_text(item.get("dataset_used"), max_chars=240) or None
                 )
                 self.db.add(db_method)
 
             # Persist claims
             claims_list = details.get("claims") or []
             for claim in claims_list:
-                claim_text = (claim.get("claim_text") or "").strip()
+                claim_text = _db_text(claim.get("claim_text"), max_chars=1800)
                 if not claim_text:
                     continue
                 db_claim = ResearchClaim(
                     workspace_id=workspace_id,
                     paper_id=paper.id,
                     claim_text=claim_text,
-                    category=claim.get("category", "finding"),
-                    evidence=claim.get("evidence"),
-                    grounding_level=claim.get("grounding_level", "fully_supported")
+                    category=_normalize_claim_category(claim.get("category")),
+                    evidence=_db_text(claim.get("evidence"), max_chars=1600) or None,
+                    grounding_level=_normalize_grounding(claim.get("grounding_level"))
                 )
                 self.db.add(db_claim)
             self.db.commit()
@@ -254,31 +305,32 @@ class ResearchPaperAnalyzer:
             return True
 
         except Exception as exc:
+            self.db.rollback()
             print(f"[Research Intelligence] LLM details extraction failed: {exc}. Using heuristic fallback.")
             try:
                 fallback = self.extract_details_heuristically(text)
                 for item in fallback.get("methods", []):
-                    method_name = (item.get("name") or "").strip()
+                    method_name = _db_text(item.get("name"), max_chars=120)
                     if not method_name:
                         continue
                     self.db.add(ResearchMethod(
                         workspace_id=workspace_id,
                         paper_id=paper.id,
-                        name=method_name[:120],
-                        description=(item.get("description") or "Extracted from methodology-like section.").strip(),
-                        dataset_used=item.get("dataset_used")
+                        name=method_name,
+                        description=_db_text(item.get("description") or "Extracted from methodology-like section.", max_chars=1200),
+                        dataset_used=_db_text(item.get("dataset_used"), max_chars=240) or None
                     ))
                 for claim in fallback.get("claims", []):
-                    claim_text = (claim.get("claim_text") or "").strip()
+                    claim_text = _db_text(claim.get("claim_text"), max_chars=1800)
                     if not claim_text:
                         continue
                     self.db.add(ResearchClaim(
                         workspace_id=workspace_id,
                         paper_id=paper.id,
                         claim_text=claim_text,
-                        category=claim.get("category", "finding"),
-                        evidence=claim.get("evidence"),
-                        grounding_level=claim.get("grounding_level", "partially_supported")
+                        category=_normalize_claim_category(claim.get("category")),
+                        evidence=_db_text(claim.get("evidence"), max_chars=1600) or None,
+                        grounding_level=_normalize_grounding(claim.get("grounding_level"), default="partially_supported")
                     ))
                 self.db.commit()
                 self.link_citation_edges(workspace_id, paper, text)
@@ -287,10 +339,12 @@ class ResearchPaperAnalyzer:
                 job.completed_at = datetime.now(UTC)
                 self.db.commit()
             except Exception as fallback_exc:
+                self.db.rollback()
                 job.status = "failed"
-                job.error_message = f"AI and heuristic extraction failed: {fallback_exc}"
+                job.error_message = _db_text(f"AI and heuristic extraction failed: {fallback_exc}", max_chars=1000)
                 job.completed_at = datetime.now(UTC)
                 self.db.commit()
+                return False
             return True
 
     @staticmethod
@@ -410,10 +464,12 @@ class ResearchPaperAnalyzer:
                 sec_type = "discussion"
 
             refined.append({
-                "heading": sec["heading"],
-                "content": content,
+                "heading": _db_text(sec["heading"], max_chars=MAX_SECTION_HEADING_CHARS) or "Section",
+                "content": _db_text(content, max_chars=MAX_SECTION_CONTENT_CHARS),
                 "section_type": sec_type
             })
+            if len(refined) >= MAX_RESEARCH_SECTIONS:
+                break
 
         return refined
 

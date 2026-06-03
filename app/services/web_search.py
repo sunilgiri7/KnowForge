@@ -625,8 +625,8 @@ def should_search_web(question: str, *, mode: WebSearchMode, has_local_context: 
     if mode == WebSearchMode.FORCE:
         return True, "User enabled web search."
 
-    if has_local_context and looks_private_or_workspace_question(q):
-        return False, "Question appears to ask about private workspace context."
+    if has_local_context:
+        return False, "Local wiki context is available; skipping automatic web search."
 
     if looks_like_web_needed(q):
         return True, "Question appears to require public/current/external information."

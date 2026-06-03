@@ -142,9 +142,10 @@ def build_chat_flow_graph(service: ChatFlowService) -> StateGraph:
         )
 
         mode = normalize_web_search_mode(request.web_search_mode)
-        bypass_wiki, bypass_reason = should_bypass_wiki_for_web(
-            request.question,
-            mode=mode,
+        bypass_wiki, bypass_reason = (
+            should_bypass_wiki_for_web(request.question, mode=mode)
+            if not has_local_context or mode.value == "force"
+            else (False, "")
         )
 
         if not bundle or not getattr(bundle, "available", False):

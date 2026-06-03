@@ -3,7 +3,9 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
+from functools import partial
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, File, UploadFile
@@ -24,6 +26,9 @@ router = APIRouter(prefix="/sources", tags=["sources"])
 
 _UPLOAD_JOBS: dict[str, dict[str, Any]] = {}
 _UPLOAD_JOB_LIMIT = 200
+# Keep heavyweight upload pipelines off the request event loop and avoid
+# running multiple large PDF/LLM jobs in parallel inside one web process.
+_UPLOAD_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="knowforge-upload")
 
 
 def _now_iso() -> str:
@@ -49,7 +54,7 @@ async def run_research_pipeline_bg(
     force_research: bool = False,
     upload_id: str | None = None,
     paper_id: str | None = None,
-):
+) -> bool:
     from app.llmwiki.research import ResearchPaperAnalyzer
 
     db = SessionLocal()
@@ -58,10 +63,10 @@ async def run_research_pipeline_bg(
             _set_upload_job(upload_id, phase="research", message="Analyzing research metadata and claims...")
         user = db.query(User).filter_by(id=user_id).first()
         if not user:
-            return
+            return False
         llm = build_user_llm(db, user)
         analyzer = ResearchPaperAnalyzer(db, llm=llm)
-        await analyzer.run_pipeline(
+        return await analyzer.run_pipeline(
             workspace_id=workspace_id,
             filename=filename,
             text=text,
@@ -76,6 +81,7 @@ async def run_research_pipeline_bg(
             _set_upload_job(upload_id, research_error=str(e))
         if paper_id:
             _mark_research_job_failed(paper_id, str(e))
+        return False
     finally:
         db.close()
 
@@ -126,6 +132,11 @@ def _create_pending_research_paper(
 
 def _run_upload_worker_sync(**kwargs: Any) -> None:
     asyncio.run(process_upload_bg(**kwargs))
+
+
+def _schedule_upload_worker(**kwargs: Any) -> None:
+    loop = asyncio.get_running_loop()
+    loop.run_in_executor(_UPLOAD_EXECUTOR, partial(_run_upload_worker_sync, **kwargs))
 
 
 async def process_upload_bg(
@@ -203,7 +214,7 @@ async def process_upload_bg(
 
             if force_research:
                 source_path = str(store.source_dir(source_id) / filename)
-                await run_research_pipeline_bg(
+                research_ok = await run_research_pipeline_bg(
                     workspace_id=workspace.id,
                     filename=filename,
                     text=text,
@@ -214,10 +225,12 @@ async def process_upload_bg(
                     upload_id=upload_id,
                     paper_id=research_paper_id,
                 )
+                if not research_ok:
+                    raise RuntimeError("Research analysis failed. Check the paper job for details.")
         elif force_research:
             source_path = str(store.source_dir(source_id) / filename)
             _set_upload_job(upload_id, status="processing", phase="research", message="Analyzing research metadata and claims...")
-            await run_research_pipeline_bg(
+            research_ok = await run_research_pipeline_bg(
                 workspace_id=workspace.id,
                 filename=filename,
                 text=text,
@@ -228,6 +241,8 @@ async def process_upload_bg(
                 upload_id=upload_id,
                 paper_id=research_paper_id,
             )
+            if not research_ok:
+                raise RuntimeError("Research analysis failed. Check the paper job for details.")
 
         _set_upload_job(
             upload_id,
@@ -259,7 +274,7 @@ async def upload_pdf(
     workspace: Annotated[Workspace, Depends(get_active_workspace_dep)],
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
-    compile_wiki: bool = True,
+    compile_wiki: bool | None = None,
     force_research: bool = False,
 ) -> SourceUploadResponse:
     require_role(get_member(db, workspace_id=workspace.id, user_id=user.id), "editor")
@@ -268,13 +283,19 @@ async def upload_pdf(
     if not file.filename.lower().endswith(".pdf"):
         raise KnowForgeError("Only PDF uploads are supported by this endpoint.", code="unsupported_file")
 
+    # Normal Wiki uploads compile a wiki page. Research-tab uploads should not
+    # also compile Wiki by default; that doubles the work for large papers and
+    # is the main reason Research processing can starve the web worker.
+    if compile_wiki is None:
+        compile_wiki = not force_research
+
     data = await file.read()
     from app.core.config import settings
     if len(data) > settings.max_pdf_upload_bytes:
         size_mb = settings.max_pdf_upload_bytes // (1024 * 1024)
         raise KnowForgeError(f"PDF upload limit is {size_mb} MB.", status_code=413, code="pdf_too_large")
 
-    text = SourceIngestor.extract_pdf_text(data)
+    text = await asyncio.to_thread(SourceIngestor.extract_pdf_text, data)
     if not text.strip():
         raise KnowForgeError("Could not extract text from this PDF.", code="empty_pdf_text")
 
@@ -308,35 +329,17 @@ async def upload_pdf(
         message=initial_message,
     )
 
-    if compile_wiki:
-        asyncio.create_task(
-            asyncio.to_thread(
-                _run_upload_worker_sync,
-                upload_id=upload_id,
-                workspace_id=workspace.id,
-                user_id=user.id,
-                source_id=source_id,
-                filename=file.filename,
-                text=text,
-                compile_wiki=compile_wiki,
-                force_research=force_research,
-                research_paper_id=research_paper_id,
-            )
-        )
-    elif force_research:
-        asyncio.create_task(
-            asyncio.to_thread(
-                _run_upload_worker_sync,
-                upload_id=upload_id,
-                workspace_id=workspace.id,
-                user_id=user.id,
-                source_id=source_id,
-                filename=file.filename,
-                text=text,
-                compile_wiki=False,
-                force_research=True,
-                research_paper_id=research_paper_id,
-            )
+    if compile_wiki or force_research:
+        _schedule_upload_worker(
+            upload_id=upload_id,
+            workspace_id=workspace.id,
+            user_id=user.id,
+            source_id=source_id,
+            filename=file.filename,
+            text=text,
+            compile_wiki=compile_wiki,
+            force_research=force_research,
+            research_paper_id=research_paper_id,
         )
 
     return SourceUploadResponse(

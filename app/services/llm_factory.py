@@ -28,7 +28,13 @@ class JsonLlm(Protocol):
         max_completion_tokens: int | None = None,
     ) -> str: ...
 
-    async def generate_json(self, prompt: str, *, temperature: float = 0.1) -> dict: ...
+    async def generate_json(
+        self,
+        prompt: str,
+        *,
+        temperature: float = 0.1,
+        max_completion_tokens: int | None = None,
+    ) -> dict: ...
 
 
 class PreferredLlmWithFallback:
@@ -69,14 +75,28 @@ class PreferredLlmWithFallback:
             )
         raise RuntimeError("No user or system LLM provider is configured.")
 
-    async def generate_json(self, prompt: str, *, temperature: float = 0.1) -> dict:
+    async def generate_json(
+        self,
+        prompt: str,
+        *,
+        temperature: float = 0.1,
+        max_completion_tokens: int | None = None,
+    ) -> dict:
         if self.primary and self.primary.available:
             try:
-                return await self.primary.generate_json(prompt, temperature=temperature)
+                return await self.primary.generate_json(
+                    prompt,
+                    temperature=temperature,
+                    max_completion_tokens=max_completion_tokens,
+                )
             except Exception as exc:
                 print(f"[LLM] User provider JSON call failed, falling back to system Groq: {exc}")
         if self.fallback and self.fallback.available:
-            return await self.fallback.generate_json(prompt, temperature=temperature)
+            return await self.fallback.generate_json(
+                prompt,
+                temperature=temperature,
+                max_completion_tokens=max_completion_tokens,
+            )
         raise RuntimeError("No user or system LLM provider is configured.")
 
 

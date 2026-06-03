@@ -28,6 +28,7 @@ from app.llmwiki.storage import WikiStore
 from app.llmwiki.text import (
     bm25_score,
     reciprocal_rank_fusion,
+    slugify,
     tokenize,
     trim_to_chars,
 )
@@ -335,7 +336,7 @@ class WikiIndexer:
         self._last_rebuild_ts = 0.0
         # Lazy VectorStore — only initialised if Pinecone key is configured
         self._vector_store = None
-        if settings.pinecone_api_key:
+        if settings.enable_semantic_vector_search and settings.pinecone_api_key:
             try:
                 from app.llmwiki.vector_store import VectorStore
                 self._vector_store = VectorStore(store._workspace_id)
@@ -388,6 +389,27 @@ class WikiIndexer:
         seen: set[str] = set()
         lowered = question.lower()
         q_tokens = set(tokenize(question))
+        quoted_phrases = [
+            phrase.strip()
+            for phrase in re.findall(r'"([^"]{2,240})"', question)
+            if phrase.strip()
+        ]
+
+        exact_title_matches: list[str] = []
+        for phrase in quoted_phrases:
+            phrase_slug = slugify(phrase)
+            phrase_tokens = set(tokenize(phrase))
+            for item in pages:
+                title_tokens = set(tokenize(item.title))
+                if (
+                    phrase_slug == item.slug
+                    or phrase.strip().lower() == item.title.strip().lower()
+                    or (phrase_tokens and phrase_tokens == title_tokens)
+                ):
+                    exact_title_matches.append(item.slug)
+
+        if exact_title_matches:
+            return list(dict.fromkeys(exact_title_matches))[: settings.kg_max_pages_in_context]
 
         # Layer 1: exact slug substring
         for slug in sorted(known, key=len, reverse=True):
@@ -403,6 +425,7 @@ class WikiIndexer:
                 found.append(candidate)
 
         # Layer 3: title-word overlap (≥2 significant title tokens in question)
+        title_matches: list[tuple[float, str]] = []
         for item in pages:
             if item.slug in seen:
                 continue
@@ -410,8 +433,11 @@ class WikiIndexer:
             # Require at least 2 meaningful overlapping words
             overlap = title_tokens & q_tokens
             if len(overlap) >= 2:
-                seen.add(item.slug)
-                found.append(item.slug)
+                score = len(overlap) / max(1, len(title_tokens))
+                title_matches.append((score, item.slug))
+        for _, slug in sorted(title_matches, reverse=True):
+            seen.add(slug)
+            found.append(slug)
 
         # Layer 4: entity name match (person names, org names, etc.)
         for item in pages:
@@ -591,13 +617,11 @@ class WikiIndexer:
             try:
                 loop = asyncio.get_event_loop()
                 if loop.is_running():
-                    # We are inside an async context — schedule and await
-                    import concurrent.futures
-                    future = asyncio.run_coroutine_threadsafe(
-                        self._vector_store.query(question, top_k=limit * 2),
-                        loop,
-                    )
-                    vector_results = future.result(timeout=5)
+                    # This method is synchronous and is commonly called from
+                    # async request handlers. Blocking the running loop while
+                    # waiting for an async vector query can deadlock the upload
+                    # and chat flows, so keep BM25 as the reliable path here.
+                    vector_results = []
                 else:
                     vector_results = loop.run_until_complete(
                         self._vector_store.query(question, top_k=limit * 2)

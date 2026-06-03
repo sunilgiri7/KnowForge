@@ -33,6 +33,8 @@ class WikiStore:
 
     def _get_vector_store(self):
         """Lazy-import VectorStore to avoid circular deps and stay graceful."""
+        if not settings.enable_semantic_vector_search:
+            return None
         from app.llmwiki.vector_store import VectorStore
         return VectorStore(self._workspace_id)
 
@@ -110,7 +112,7 @@ class WikiStore:
         # Async vector upsert — fire-and-forget, never blocks page save
         try:
             vs = self._get_vector_store()
-            if vs.available:
+            if vs and vs.available:
                 asyncio.create_task(
                     vs.upsert_page(
                         slug=page.meta.slug,
@@ -158,7 +160,7 @@ class WikiStore:
         # Remove vectors from Pinecone — fire-and-forget
         try:
             vs = self._get_vector_store()
-            if vs.available:
+            if vs and vs.available:
                 asyncio.create_task(vs.delete_page(slug))
         except RuntimeError:
             pass

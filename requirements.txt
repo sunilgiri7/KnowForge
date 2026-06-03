@@ -37,7 +37,6 @@ jmespath==1.1.0
 joblib==1.5.3
 jsonpatch==1.33
 jsonpointer==3.1.1
--e git+https://github.com/sunilgiri7/KnowForge.git@9c2e45b57aaa4a2cb2176ab3a3ec9fed7c1ccb76#egg=knowforge
 langchain==0.3.30
 langchain-core==0.3.86
 langchain-text-splitters==0.3.11

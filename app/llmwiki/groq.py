@@ -40,8 +40,18 @@ class GroqClient:
             timeout=self.timeout_seconds,
         )
 
-    async def generate_json(self, prompt: str, *, temperature: float = 0.1) -> dict[str, Any]:
-        text = await self.generate_text(prompt, temperature=temperature)
+    async def generate_json(
+        self,
+        prompt: str,
+        *,
+        temperature: float = 0.1,
+        max_completion_tokens: int | None = None,
+    ) -> dict[str, Any]:
+        text = await self.generate_text(
+            prompt,
+            temperature=temperature,
+            max_completion_tokens=max_completion_tokens,
+        )
         return self._parse_json(text)
 
     def _generate_text_sync(
@@ -53,7 +63,6 @@ class GroqClient:
         from groq import Groq
 
         client = Groq(api_key=self.api_key)
-        print(f"Sending prompt to GROQ: {prompt}")
         completion = client.chat.completions.create(
             model=self.model,
             messages=[{"role": "user", "content": prompt}],
@@ -75,9 +84,9 @@ class GroqClient:
             cleaned = re.sub(r"^```(?:json)?", "", cleaned).strip()
             cleaned = re.sub(r"```$", "", cleaned).strip()
         try:
-            return json.loads(cleaned)
+            return json.loads(cleaned, strict=False)
         except json.JSONDecodeError:
             match = re.search(r"\{.*\}", cleaned, flags=re.DOTALL)
             if not match:
                 raise
-            return json.loads(match.group(0))
+            return json.loads(match.group(0), strict=False)

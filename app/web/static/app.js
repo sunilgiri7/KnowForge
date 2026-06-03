@@ -7,6 +7,7 @@ const API = {
   chat: "/api/v1/chat",
   sessions: "/api/v1/chat/sessions",
   upload: "/api/v1/sources/upload",
+  uploadStatus: "/api/v1/sources/uploads",
   wikiPages: "/api/v1/wiki/pages",
   contradictions: "/api/v1/wiki/contradictions",
   compact: "/api/v1/wiki/compact",
@@ -63,6 +64,8 @@ const state = {
   openWikiMenuSlug: null,
   editingWikiSlug: null,
   editingWikiTitle: "",
+  wikiUploadPollTimer: null,
+  activeWikiUploadId: null,
   sidebarCollapsed: false,
   sidebarWidth: SIDEBAR_DEFAULT_WIDTH,
   sidebarResizing: false,
@@ -2007,7 +2010,8 @@ async function loadSession(sessionId, options = {}) {
 async function loadWikiPages() {
   try {
     const pages = await apiFetch(API.wikiPages);
-    state.wikiPages = pages;
+    const pendingUploads = state.wikiPages.filter((page) => page.is_upload_pending);
+    state.wikiPages = [...pendingUploads, ...pages];
     if (!state.wikiPages.some((page) => page.slug === state.editingWikiSlug)) {
       state.editingWikiSlug = null;
       state.editingWikiTitle = "";
@@ -2051,7 +2055,8 @@ function renderWikiPages() {
   for (const page of state.wikiPages) {
     const item = document.createElement("div");
     const isEditing = state.editingWikiSlug === page.slug;
-    item.className = `session-item wiki-page-item ${isEditing ? "editing" : ""}`;
+    const isPendingUpload = Boolean(page.is_upload_pending);
+    item.className = `session-item wiki-page-item ${isEditing ? "editing" : ""} ${isPendingUpload ? "upload-pending" : ""}`;
     item.innerHTML = isEditing
       ? `
         <div class="wiki-item session-row editing">
@@ -2064,6 +2069,19 @@ function renderWikiPages() {
             </div>
           </div>
           <div class="session-actions"></div>
+        </div>
+      `
+      : isPendingUpload
+      ? `
+        <div class="wiki-item session-row wiki-card-row upload-pending-row">
+          <span class="thinking-spinner wiki-upload-spinner" aria-hidden="true"></span>
+          <div class="session-details">
+            <strong class="session-title">${escapeHtml(page.title)}</strong>
+            <div class="wiki-badges">
+              <span class="wiki-badge warn">Processing</span>
+            </div>
+            <span>${escapeHtml(page.summary || "Building wiki page...")}</span>
+          </div>
         </div>
       `
       : `
@@ -2088,6 +2106,10 @@ function renderWikiPages() {
         </div>
       `;
 
+    if (isPendingUpload) {
+      els.wikiList.appendChild(item);
+      continue;
+    }
     if (isEditing) {
       const input = item.querySelector(".wiki-title-input");
       input.addEventListener("input", (event) => {
@@ -2130,6 +2152,85 @@ function renderWikiPages() {
   }
 }
 
+function setWikiUploadStatus(message, { busy = false } = {}) {
+  els.uploadState.textContent = message;
+  els.uploadState.classList.toggle("muted", !busy && message === "Ready");
+}
+
+function upsertPendingWikiUpload(uploadId, filename, message) {
+  const slug = `upload-${uploadId}`;
+  const existing = state.wikiPages.find((page) => page.slug === slug);
+  if (existing) {
+    existing.summary = message || existing.summary;
+    renderWikiPages();
+    return;
+  }
+  state.wikiPages = [
+    {
+      slug,
+      title: filename || "Uploaded PDF",
+      summary: message || "Processing upload...",
+      tags: [],
+      freshness: "current",
+      confidence: "medium",
+      source_ids: [],
+      entity_count: 0,
+      related_count: 0,
+      is_upload_pending: true,
+    },
+    ...state.wikiPages,
+  ];
+  renderWikiPages();
+}
+
+function removePendingWikiUpload(uploadId) {
+  const slug = `upload-${uploadId}`;
+  state.wikiPages = state.wikiPages.filter((page) => page.slug !== slug);
+  renderWikiPages();
+}
+
+function stopWikiUploadPolling() {
+  if (state.wikiUploadPollTimer) {
+    clearInterval(state.wikiUploadPollTimer);
+    state.wikiUploadPollTimer = null;
+  }
+}
+
+async function pollWikiUploadStatus(uploadId) {
+  if (!uploadId) return;
+  try {
+    const job = await apiFetch(`${API.uploadStatus}/${encodeURIComponent(uploadId)}`, { timeout: 15000 });
+    const message = job.message || "Building wiki page...";
+    setWikiUploadStatus(message, { busy: true });
+    upsertPendingWikiUpload(uploadId, job.filename, message);
+
+    if (job.status === "completed") {
+      stopWikiUploadPolling();
+      state.activeWikiUploadId = null;
+      removePendingWikiUpload(uploadId);
+      await Promise.all([loadWikiPages(), loadConflicts(), loadTier4()]);
+      setWikiUploadStatus("Ready");
+      toast(job.wiki_page_slug ? "Wiki page is ready for chat." : "PDF upload complete.");
+    } else if (job.status === "failed") {
+      stopWikiUploadPolling();
+      state.activeWikiUploadId = null;
+      removePendingWikiUpload(uploadId);
+      setWikiUploadStatus("Failed", { busy: true });
+      showUploadError(job.error || "Upload processing failed.");
+    }
+  } catch (error) {
+    setWikiUploadStatus("Processing in background...", { busy: true });
+  }
+}
+
+function startWikiUploadPolling(uploadId, filename, message) {
+  stopWikiUploadPolling();
+  state.activeWikiUploadId = uploadId;
+  upsertPendingWikiUpload(uploadId, filename, message);
+  pollWikiUploadStatus(uploadId);
+  state.wikiUploadPollTimer = setInterval(() => pollWikiUploadStatus(uploadId), 2500);
+}
+
 async function uploadPdf(file) {
   els.uploadError.hidden = true;
   if (!file) return;
@@ -2144,18 +2245,21 @@ async function uploadPdf(file) {
 
   const form = new FormData();
   form.append("file", file);
-  els.uploadState.textContent = "Uploading";
-  els.uploadState.classList.remove("muted");
+  setWikiUploadStatus("Uploading...", { busy: true });
   try {
     const response = await apiFetch(API.upload, { method: "POST", body: form, timeout: 90000 });
-    toast(`Uploaded ${response.filename}. Wiki page: ${response.wiki_page_slug || "not compiled"}`);
-    await loadConflicts();
-    els.uploadState.textContent = "Ready";
-    await loadWikiPages();
-    await loadTier4();
+    toast(`Uploaded ${response.filename}. Processing started.`);
+    if (response.upload_id && response.status !== "completed") {
+      startWikiUploadPolling(response.upload_id, response.filename, response.message || "Processing upload...");
+    } else {
+      setWikiUploadStatus("Ready");
+      await Promise.all([loadWikiPages(), loadConflicts(), loadTier4()]);
+    }
   } catch (error) {
     showUploadError(error.message);
-    els.uploadState.textContent = "Failed";
+    setWikiUploadStatus("Failed", { busy: true });
+  } finally {
+    if (els.pdfInput) els.pdfInput.value = "";
   }
 }
 
@@ -3105,7 +3209,9 @@ loadWorkspaces();
     activePaperId: null,
     activePaperDetails: null,
     lastComparison: null,
-    lastGaps: null
+    lastGaps: null,
+    activeUploadId: null,
+    uploadPollTimer: null
   };
 
   API.researchPapers = "/api/v1/research/papers";
@@ -3113,6 +3219,7 @@ loadWorkspaces();
   API.researchGraph = "/api/v1/research/graph";
   API.researchCompare = "/api/v1/research/compare";
   API.researchGaps = "/api/v1/research/gaps";
+  API.uploadStatus = "/api/v1/sources/uploads";
 
   const elements = {
     researchList: document.querySelector("#researchList"),
@@ -3626,22 +3733,60 @@ loadWorkspaces();
     setTimeout(() => setUploadBusy(false), 4000);
   }
 
+  function stopUploadStatusPolling() {
+    if (researchState.uploadPollTimer) {
+      clearInterval(researchState.uploadPollTimer);
+      researchState.uploadPollTimer = null;
+    }
+  }
+
+  async function pollResearchUploadStatus(uploadId) {
+    if (!uploadId) return;
+    try {
+      const job = await apiFetch(`${API.uploadStatus}/${encodeURIComponent(uploadId)}`, { timeout: 15000 });
+      const phase = job.phase ? `${job.phase}: ` : "";
+      setUploadBusy(true, job.message || `${phase}Processing research PDF...`);
+      await loadResearchPapers();
+
+      if (job.status === "completed") {
+        stopUploadStatusPolling();
+        researchState.activeUploadId = null;
+        setUploadBusy(true, "Research analysis complete.");
+        toast("Research paper analysis complete.");
+        setTimeout(() => setUploadBusy(false), 1200);
+      } else if (job.status === "failed") {
+        stopUploadStatusPolling();
+        researchState.activeUploadId = null;
+        showResearchUploadError(job.error || job.research_error || "Research processing failed.");
+      }
+    } catch (error) {
+      setUploadBusy(true, "Processing continues in background. Waiting for server status...");
+    }
+  }
+
+  function startUploadStatusPolling(uploadId) {
+    stopUploadStatusPolling();
+    researchState.activeUploadId = uploadId;
+    pollResearchUploadStatus(uploadId);
+    researchState.uploadPollTimer = setInterval(() => pollResearchUploadStatus(uploadId), 3000);
+  }
+
   async function uploadResearchPdf(file) {
     if (!file) return;
     if (file.type !== "application/pdf" && !file.name.toLowerCase().endsWith(".pdf")) {
       showResearchUploadError("Please choose a PDF file.");
       return;
     }
-    setUploadBusy(true, "Uploading document...");
+    setUploadBusy(true, "Uploading and extracting PDF text...");
     const form = new FormData();
     form.append("file", file);
     try {
-      const response = await apiFetch(`${API.upload}?force_research=true`, { method: "POST", body: form, timeout: 120000 });
-      toast(`Uploaded ${response.filename}. Analysis started.`);
-      setUploadBusy(true, "Analyzing paper...");
-      if (window.loadWikiPages) await window.loadWikiPages();
+      const response = await apiFetch(`${API.upload}?force_research=true&compile_wiki=false`, { method: "POST", body: form, timeout: 120000 });
+      toast(`Uploaded ${response.filename}. Research analysis started.`);
+      setUploadBusy(true, response.message || "Research analysis queued...");
       await loadResearchPapers();
-      setTimeout(() => setUploadBusy(false), 1500);
+      if (response.upload_id) startUploadStatusPolling(response.upload_id);
+      else setTimeout(() => setUploadBusy(false), 1500);
     } catch (error) {
       showResearchUploadError(error.message);
     } finally {

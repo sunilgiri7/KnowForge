@@ -98,6 +98,7 @@ class Settings(BaseSettings):
     # ── Pinecone / Vector Search (optional) ──────────────────────────────────
     # When set, KnowForge enables hybrid retrieval (BM25 + semantic vectors).
     # Leave blank to run in pure BM25 mode — the system degrades gracefully.
+    enable_semantic_vector_search: bool = False
     pinecone_api_key: str | None = None
     pinecone_index_name: str = "knowforge"
     # Hybrid fusion weight: 0.0 = pure BM25, 1.0 = pure vector. 0.5 = balanced.

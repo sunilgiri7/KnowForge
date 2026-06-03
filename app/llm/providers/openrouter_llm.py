@@ -29,7 +29,16 @@ class OpenRouterLlm:
             max_tokens=max_completion_tokens,
         )
 
-    async def generate_json(self, prompt: str, *, temperature: float = 0.1) -> dict[str, Any]:
-        text = await self.generate_text(prompt, temperature=temperature)
+    async def generate_json(
+        self,
+        prompt: str,
+        *,
+        temperature: float = 0.1,
+        max_completion_tokens: int | None = None,
+    ) -> dict[str, Any]:
+        text = await self.generate_text(
+            prompt,
+            temperature=temperature,
+            max_completion_tokens=max_completion_tokens,
+        )
         return GroqClient._parse_json(text)
-
